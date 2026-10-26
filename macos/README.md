@@ -40,11 +40,14 @@ and verifies the complete result with `codesign --verify --deep --strict`. Signi
 private keys are never build inputs stored in Git. Developer ID distribution, notarization and
 Gatekeeper installation on a clean Mac remain pending the owner's distribution decision.
 
-To package a verified bundle without losing its symlinks or signature:
+The build also writes `macos/dist/<profile>-launcher-macos.zip`, printing its SHA256 and byte size.
+The native bundle has no resource-fork payload. Packaging uses `ditto --norsrc` to keep the archive
+under one application root, as schema 1 requires. AppleDouble `__MACOSX` sidecars are refused.
+The extracted bundle must still pass strict signature verification. No OS quarantine or Gatekeeper
+setting is changed. To inspect the Algalon artifact:
 
 ```sh
 cd macos/dist
-ditto -c -k --sequesterRsrc --keepParent "Algalon Launcher.app" algalon-launcher-macos.zip
 shasum -a 256 algalon-launcher-macos.zip
 stat -f %z algalon-launcher-macos.zip
 ```
