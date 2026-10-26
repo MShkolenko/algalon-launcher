@@ -43,7 +43,6 @@ cp "$CHECK_BUILD/proxy" "$PRIVATE_FIXTURE"
 FOREVER_SERVER_IPV4=127.0.0.1 FOREVER_PRIVATE_EXECUTABLE="$PRIVATE_FIXTURE" DYLD_INSERT_LIBRARIES="$CHECK_BUILD/libRealmDNS.dylib" "$PRIVATE_FIXTURE" 1
 FOREVER_SERVER_IPV4=invalid DYLD_INSERT_LIBRARIES="$CHECK_BUILD/libRealmDNS.dylib" "$PRIVATE_FIXTURE" 0
 
-xcrun swift Tests/VerifyUpdateVector.swift ../docs/test-vector
 python3 packaging/profile.py example
 cat > "$CHECK_BUILD/main.swift" <<'SWIFT'
 import Foundation

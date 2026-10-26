@@ -5,3 +5,4 @@ dist/
 *.zip
 graphify-out/
 .DS_Store
+__pycache__/

@@ -1,0 +1,5 @@
+module ArchiveCheck {
+  header "ArchiveCheck.h"
+  link "z"
+  export *
+}

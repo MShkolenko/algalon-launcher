@@ -83,7 +83,11 @@ or private keys go into this repository or into a launcher.
   itself when it did not. `update=0` in `launcher.ini` turns it off. Proven end to end against a real GitHub feed:
   update, rollback of a build that dies at start, no retry of that build, a late confirmation racing a rollback,
   refusal of a foreign signature and of a mismatching download.
-- **macOS**: not yet (planned as a separate change).
+- **macOS** (`macos/`, from version 1.1.0): implements the same authenticated feed with bounded ZIP
+  validation, native signature/identity checks, a single-instance lock, two-way startup confirmation
+  and rollback. Native process/recovery tests and reading the public signed feed pass. Actual
+  production-signed Mac feed activation and distribution acceptance are still pending; see
+  [macOS operational notes](macos/README.md#authenticated-launcher-updates).
 
 ## Disclaimer
 
