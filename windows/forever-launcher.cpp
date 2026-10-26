@@ -1064,6 +1064,8 @@ static wstr prepare_own_client(const wstr& root, const wstr& product, const wstr
     return own;
 }
 
+#include "updater.h"
+
 // ---- main -------------------------------------------------------------------------------------------------------
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
@@ -1101,11 +1103,56 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     wchar_t selfbuf[MAX_PATH];
     GetModuleFileNameW(nullptr, selfbuf, MAX_PATH);
     wstr self = selfbuf;
-    say(REALM_ID L"-launcher start (%s)", self.c_str());
+    say(REALM_ID L"-launcher %s start (%s)", LAUNCHER_VERSION, self.c_str());
 
-    // 1. settings, in %LOCALAPPDATA%\<realm long name> (the exe may sit in a read-only folder)
+    // 0. self-update (docs/update-feed.md). A launcher started by an update confirms its start at once, before even
+    // reading its settings (the old one waits at most 30 s, while the game copy below can take minutes and a folder or
+    // administrator prompt waits for the player), and removes the previous file once the old one accepted and exited.
+    // Otherwise the feed is checked unless launcher.ini says update=0 or <exe>.old is left from an interrupted update.
+    // Every failure in the check means "no update". --update-only: do just this part, then exit (unattended tests).
+    bool update_only = false;
+    DWORD updated_from = 0;
+    wstr token;
+    for (int k = 1; k < argc; ++k) {
+        wstr a = argv[k];
+        if (a == L"--update-only") update_only = true;
+        else if (a == L"--updated-from" && k + 1 < argc) updated_from = wcstoul(argv[++k], nullptr, 10);
+        else if (a == L"--update-token" && k + 1 < argc) token = argv[++k];
+    }
+    if (updated_from || !token.empty()) {  // both or neither; a half or malformed pair means a broken update start
+        if (!updated_from || updated_from == GetCurrentProcessId() || !upd::valid_token(token)) {
+            say(L"update: malformed --updated-from/--update-token, ignored");
+            updated_from = 0;
+        }
+    }
+    if (updated_from) {
+#ifdef LAUNCHER_TEST_EXIT_BEFORE_CONFIRM
+        return 7;  // test builds only: a new version that dies before confirming, to prove the rollback
+#endif
+        upd::confirm_and_clean(self, updated_from, token);
+    }
     wstr ini_path = g_logdir + L"\\launcher.ini";
     Ini ini = read_ini(ini_path);
+    if (!updated_from) {
+        if (exists(self + L".old")) {
+            say(L"update: %s.old is left from an interrupted update; it may be the only good copy, so it is kept and no "
+                L"update is tried until it is removed or renamed back", self.c_str());
+        } else if (!ini.count(L"update") || ini[L"update"] != L"0") {
+            std::string bytes, version;
+            if (upd::find_update(self + L".bad", bytes, version)) {
+                wstr stuck;
+                upd::Result r = upd::install(self, bytes, version, single, update_only ? L" --update-only" : L"", stuck);
+                if (r == upd::HANDED_OVER || r == upd::OTHER_RUNNING) return 0;
+                if (r == upd::STUCK) return update_only ? 3 : fail(stuck.c_str());
+            }
+        }
+    }
+    if (update_only) {
+        say(L"update-only: done");
+        return 0;
+    }
+
+    // 1. settings, in %LOCALAPPDATA%\<realm long name> (the exe may sit in a read-only folder)
     const std::pair<const wchar_t*, wstr> defaults[] = {{L"exe", DEF_EXE},       {L"server", DEF_SERVER},
                                                         {L"portal", DEF_PORTAL}, {L"config", DEF_CONFIG},
                                                         {L"key", DEF_KEY},       {L"group", std::to_wstring(DEF_GROUP)}};

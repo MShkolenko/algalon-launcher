@@ -9,5 +9,7 @@ for /f "usebackq delims=" %%i in (`call "%VSWHERE%" -latest -prerelease -product
 if not defined VS (echo Visual Studio with the C++ desktop tools not found & exit /b 1)
 call "%VS%\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
 cl /nologo /std:c++17 /EHsc /DUNICODE /D_UNICODE /I "profiles\example" test_hosts.cpp /Fe:test_hosts.exe /link /SUBSYSTEM:CONSOLE shell32.lib ole32.lib user32.lib crypt32.lib ws2_32.lib || exit /b 1
-del /q test_hosts.obj 2>nul
-"%~dp0test_hosts.exe"
+cl /nologo /std:c++17 /EHsc /DUNICODE /D_UNICODE /I "profiles\example" test_updater.cpp /Fe:test_updater.exe /link /SUBSYSTEM:CONSOLE shell32.lib ole32.lib user32.lib crypt32.lib ws2_32.lib || exit /b 1
+del /q test_hosts.obj test_updater.obj 2>nul
+"%~dp0test_hosts.exe" || exit /b 1
+"%~dp0test_updater.exe"

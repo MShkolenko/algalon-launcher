@@ -37,7 +37,9 @@ launchers if it is ever served, so sign a manifest only for a build meant to shi
 1. Upload the platform files to the release. 2. Write `manifest.json` with their SHA256 and size, sign it
 (`tools/sign_manifest.py sign`), check it (`tools/sign_manifest.py verify`). 3. Upload `manifest.json` and
 `manifest.json.sig` last, then mark the release as full. A launcher that meets a mismatched pair (fetched during a
-publication) treats it as "no update" and tries again at its next start.
+publication) treats it as "no update" and tries again at its next start. Measured 2026-10-26: GitHub keeps serving
+the previous `latest` files for about one and a half minutes after a new release, and different edges switch at
+different moments.
 
 ## manifest.json
 
@@ -107,8 +109,13 @@ signature it produced before it ships.
 The launcher never replaces itself until the new file is fully verified, keeps the previous one until the new one has
 proved it starts, and tries to put the previous one back by itself when the new one does not.
 
-"Started" below means: the new launcher has read its settings and reached the point where it would start the game,
-and has confirmed it through a handshake bound to this one attempt. Before starting the new launcher the old process
+"Started" below means: the new launcher's process runs, has opened its log, taken the single-instance lock and
+accepted its update arguments, and has confirmed that through a handshake bound to this one attempt. The handshake is
+deliberately that early: later steps can legitimately take minutes (rebuilding the game copy after a client update)
+or wait for the player (a folder dialog, an administrator prompt), and must not trigger a rollback. A new build that
+starts but fails later is not rolled back automatically. The old launcher releases the single-instance lock just
+before starting the new one and takes it back on a rollback; if another launcher took it meanwhile, the old one
+stops instead of running twice. Before starting the new launcher the old process
 makes a random 128-bit attempt token (32 hex digits) and passes it as `--update-token <token>`:
 
 - Windows: the old process first creates a new, non-signalled, manual-reset event `Local\<id>LauncherUpdated-<token>`
@@ -133,7 +140,9 @@ launcher was started, never counts.
    is not offered again in this session.
 
 At start, a launcher started without `--updated-from` that finds `<exe>.old` next to itself leaves it alone (it may be
-the only good copy after an interrupted update) and logs it; it is deleted only by a launcher that completed step 4.
+the only good copy after an interrupted update), logs it and does not update until it is resolved; it is deleted only
+by a launcher that completed step 4. A build whose SHA-256 equals that of `<exe>.bad` is not downloaded or tried
+again. All renames use write-through.
 
 **macOS** (`<app>` is the running bundle):
 

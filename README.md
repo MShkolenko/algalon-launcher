@@ -49,6 +49,7 @@ Visual Studio 2022 or newer with the "Desktop development with C++" workload.
 windows\build.cmd algalon     the official Algalon Forever launcher (algalon-launcher.exe)
 windows\build.cmd example     the template (example-launcher.exe)
 windows\test.cmd              tests of the hosts file logic (sample files only, the real hosts is never touched)
+                              and of the self-update helpers (JSON, versions, URLs, signature, request deadline)
 ```
 
 On macOS, `bash macos/packaging/build.sh algalon` builds a universal application using the same
@@ -74,9 +75,15 @@ Releases are published here. A pre-release is a build under test; a full release
 Self-update follows [docs/update-feed.md](docs/update-feed.md): each full release carries `manifest.json` (version,
 URL, SHA256 and size per platform) and its ECDSA P-256 signature, made by the realm owner with
 `tools/sign_manifest.py` and a key that never leaves the owner (tests: `python tools/test_sign_manifest.py`).
-Launchers verify the signature with the public key in their profile (`REALM_UPDATE_PUBKEY`). The specification is
-final; the launchers do not implement updating yet. No tokens, credentials or private keys go into this repository
-or into a launcher.
+Launchers verify the signature with the public key in their profile (`REALM_UPDATE_PUBKEY`). No tokens, credentials
+or private keys go into this repository or into a launcher.
+
+- **Windows** (`windows/updater.h`, from version 1.1.0): checks the feed at every start (at most 20 s when GitHub is
+  slow, plus at most 2 minutes for a download), installs a newer signed build, confirms the new launcher started and rolls back by
+  itself when it did not. `update=0` in `launcher.ini` turns it off. Proven end to end against a real GitHub feed:
+  update, rollback of a build that dies at start, no retry of that build, a late confirmation racing a rollback,
+  refusal of a foreign signature and of a mismatching download.
+- **macOS**: not yet (planned as a separate change).
 
 ## Disclaimer
 
