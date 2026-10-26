@@ -1,0 +1,26 @@
+{
+  "profiles_built": [
+    "algalon",
+    "example"
+  ],
+  "architectures": [
+    "arm64",
+    "x86_64"
+  ],
+  "strict_signatures": true,
+  "real_game_launched": false,
+  "system_trust_modified": false,
+  "self_update_implemented": false,
+  "scope": "Profile-separated baseline port; self-update installer not implemented",
+  "baseline_live_client": "1.60.1.70532 arm64 release",
+  "baseline_live_result": "Account/SRP, realm, one validated region key, character list, visual world, clean exit confirmed on 2026-10-26 in original1.0.3 build",
+  "current_profile_port_live_run": false,
+  "native_fixture_pass_markers": 88,
+  "cryptokit_good_vector": true,
+  "cryptokit_tampered_vector_rejected": true,
+  "cryptokit_double_hash_rejected": true,
+  "builder_home_paths_in_distributed_binaries": 0,
+  "signing": "hardened ad-hoc",
+  "notarized": false,
+  "clean_mac_install_tested": false
+}
