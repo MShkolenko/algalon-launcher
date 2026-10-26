@@ -2,3 +2,4 @@
 *.obj
 *.res
 *.pdb
+graphify-out/

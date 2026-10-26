@@ -14,9 +14,12 @@ https://github.com/advocaite/TrinityCore/tree/forever (branch `forever`).
 | `windows/profiles/<name>/` | A realm profile: `profile.h` (server, portal, CA certificate, names), `launcher.rc` (icon). |
 | `windows/profiles/algalon/` | The Algalon Forever realm: the profile of the official releases. |
 | `windows/profiles/example/` | A neutral template to copy for your own realm. |
-| `macos/` | macOS launcher: coming. |
+| `macos/` | Native Swift/C macOS launcher, isolated release copy and universal build. See its README. |
 
 ## What the launcher does on your computer
+
+The following describes Windows. The [macOS implementation](macos/README.md) uses scoped user
+trust and a process-local resolver instead of an administrator helper or hosts-file changes.
 
 It asks for administrator rights once, and only when something is missing, to:
 
@@ -47,6 +50,10 @@ windows\build.cmd algalon     the official Algalon Forever launcher (algalon-lau
 windows\build.cmd example     the template (example-launcher.exe)
 windows\test.cmd              tests of the hosts file logic (sample files only, the real hosts is never touched)
 ```
+
+On macOS, `bash macos/packaging/build.sh algalon` builds a universal application using the same
+canonical realm profile. See [macos/README.md](macos/README.md) for prerequisites, isolation,
+signing limitations, local tests and the verified baseline result.
 
 ## Verify a release
 

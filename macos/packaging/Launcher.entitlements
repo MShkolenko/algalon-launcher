@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- The launcher must be able to acquire the task port of our re-signed client copy. Apple grants
+         this only to a process carrying cs.debugger whose TARGET carries get-task-allow. This entitlement
+         is honored for a Developer ID or development-signed binary; a purely ad-hoc signature may not
+         grant it (see README). -->
+    <key>com.apple.security.cs.debugger</key>
+    <true/>
+</dict>
+</plist>

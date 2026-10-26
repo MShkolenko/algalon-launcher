@@ -1,0 +1,7 @@
+.build/
+Generated/
+dist/
+*.app/
+*.zip
+graphify-out/
+.DS_Store
