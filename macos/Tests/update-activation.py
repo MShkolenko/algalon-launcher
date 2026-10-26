@@ -52,7 +52,8 @@ def main():
                 import fcntl
                 with (folder / "fixture.lock").open("w") as held:
                     fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    result = subprocess.run([str(binary), "success", str(folder)], timeout=5)
+                    result = subprocess.run([str(app / "Contents/MacOS/Fixture"), "success",
+                                             str(folder)], timeout=5)
                     assert result.returncode == 27
                     assert app.exists() and staged.exists()
                     assert not (folder / "Fixture.app.old").exists()
@@ -60,7 +61,9 @@ def main():
                 continue
             mode = case if case in ["success", "crash", "hang", "retained-old", "no-accept"] else "reject"
             started = time.monotonic()
-            subprocess.run([str(binary), mode, str(folder)], check=True, timeout=40)
+            # The old executable runs inside the very signed bundle that the installer renames.
+            subprocess.run([str(app / "Contents/MacOS/Fixture"), mode, str(folder)],
+                           check=True, timeout=40)
             if case == "hang":
                 assert 29 <= time.monotonic() - started <= 35
                 print("PASS: actual 30-second startup timeout rolls back despite stale ready", flush=True)

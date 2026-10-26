@@ -191,7 +191,11 @@ func activateLauncherUpdate(
     _ = try updateRegularFile(file, maximum: 32)
     try manager.removeItem(at: file)
   }
-  let token = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+  var random = [UInt8](repeating: 0, count: 16)
+  guard SecRandomCopyBytes(kSecRandomDefault, random.count, &random) == errSecSuccess else {
+    throw UpdateError.installation
+  }
+  let token = random.map { String(format: "%02x", $0) }.joined()
   let arguments = ["--updated-from", String(getpid()), "--update-token", token]
   guard let attempt = UpdateAttempt(arguments: ["launcher"] + arguments) else {
     throw UpdateError.installation
