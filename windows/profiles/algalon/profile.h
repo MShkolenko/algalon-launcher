@@ -42,3 +42,8 @@
     "Oa/b076cW03FHX0Lk8UZ9xq3wJfh56rPupp2CaVTKCZNXvTaNV12moKRtv++vsLd\n" \
     "/aFCnS4Z+urSeYDTUjqsuhXm\n" \
     "-----END CERTIFICATE-----\n"
+
+// Update feed (docs/update-feed.md): the latest full release of this repository, signed with the realm owner's ECDSA
+// P-256 key. Public key, 64 bytes X||Y in hex; the private key is kept offline by the owner.
+#define REALM_UPDATE_REPO   L"MShkolenko/algalon-launcher"
+#define REALM_UPDATE_PUBKEY L"3AAF60D82A8FAF4433C49D51A7A01BE9CD62B39F3A3BBC452A7CC726E28675C2E44A00A9E54FA3A9E6AAA2560B4ABD6DDA487230CFB729C4A102D36AC1989D75"

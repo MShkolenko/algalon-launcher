@@ -18,3 +18,8 @@
 // this template fails with an error at the CA step until you put your own certificate in (the hosts line may
 // already have been written by then).
 #define REALM_CA_PEM ""
+
+// Update feed (docs/update-feed.md): your repository and your ECDSA P-256 public key (64 bytes X||Y in hex, made with
+// tools/sign_manifest.py --new-key). Empty: no self-update.
+#define REALM_UPDATE_REPO   L""
+#define REALM_UPDATE_PUBKEY L""

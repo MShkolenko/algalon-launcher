@@ -62,9 +62,14 @@ your own CA certificate (public part only, with a critical nameConstraints permi
 
 ## Releases and updates
 
-Planned: GitHub Releases in this repository plus a manifest (version, URL, SHA256 per platform) signed with a key held
-only by the realm owner; launchers verify it with an embedded public key. No tokens, credentials or private keys go
-into this repository or into a launcher.
+Releases are published here. A pre-release is a build under test; a full release is what launchers update to.
+
+Self-update follows [docs/update-feed.md](docs/update-feed.md): each full release carries `manifest.json` (version,
+URL, SHA256 and size per platform) and its ECDSA P-256 signature, made by the realm owner with
+`tools/sign_manifest.py` and a key that never leaves the owner (tests: `python tools/test_sign_manifest.py`).
+Launchers verify the signature with the public key in their profile (`REALM_UPDATE_PUBKEY`). The specification is
+final; the launchers do not implement updating yet. No tokens, credentials or private keys go into this repository
+or into a launcher.
 
 ## Disclaimer
 
