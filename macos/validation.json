@@ -23,12 +23,14 @@
   "signing": "hardened ad-hoc",
   "notarized": false,
   "clean_mac_install_tested": false,
-  "native_updater_fixture_pass_markers": 77,
+  "native_updater_fixture_pass_markers": 75,
   "native_30_second_rollback": true,
   "two_way_activation_and_parent_exit": true,
   "retained_old_and_lock_controls": true,
   "production_signed_manifest_https_read": true,
   "untrusted_local_tls_refused_before_http": true,
   "actual_signed_mac_feed_activation": false,
-  "current_version": "1.1.0(5)"
+  "current_version": "1.1.1(6)",
+  "full_128_bit_attempt_token": true,
+  "old_fixture_runs_from_bundle_being_renamed": true
 }

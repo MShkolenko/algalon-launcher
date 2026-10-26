@@ -109,7 +109,7 @@ The example profile and path-traversal refusal have independent checks.
 
 ## Authenticated launcher updates
 
-Version 1.1.0 implements schema 1 in `../docs/update-feed.md`, using the public repository and
+Version 1.1.1 implements schema 1 in `../docs/update-feed.md`, using the public repository and
 embedded P-256 key from the selected canonical profile. An empty key/repository disables updates.
 Each normal start reads the public latest-full-release manifest and signature through URLSession,
 with system DNS/proxy/TLS validation, no cookies or credential store, bounded bytes and deadlines.
