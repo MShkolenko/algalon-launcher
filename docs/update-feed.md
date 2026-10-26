@@ -123,6 +123,9 @@ makes a random 128-bit attempt token (32 hex digits) and passes it as `--update-
   signals it. Only the old process's own handle is waited on.
 - macOS: the old process deletes every `<app>.started-*` file, then the new launcher creates
   `<app>.started-<token>` containing the token; the old process accepts only that file name with that content.
+  The old process then creates `<app>.accepted-<token>` with the same content only after choosing handover.
+  The child MUST wait for that acceptance and the parent's exit before deleting `.old`. Ready alone is
+  insufficient: a late ready racing the parent's rollback must never authorize deleting recovery.
 
 The old process waits at most 30 seconds. A confirmation with any other token, or one that existed before the new
 launcher was started, never counts.
@@ -158,6 +161,10 @@ again. All renames use write-through.
 6. relaunch `<app>` with the token and wait for the handshake; on success the old process exits and the new launcher
    deletes `<app>.old`; without it within 30 s the old process terminates the new one, deletes an earlier `<app>.bad`,
    moves `<app>` to `<app>.bad`, renames `<app>.old` back and continues as the old launcher.
+
+The Mac launcher records the failed ZIP's authenticated SHA256 in `<app>.bad.sha256`, because hashing the
+extracted bundle does not reproduce the ZIP hash. That same archive is not downloaded or retried at a later start.
+A retained `.bad` without that archive identity suspends updates pending manual recovery.
 
 **If putting the old launcher back fails** (the new process cannot be ended, a file is locked, a rename is refused):
 the old process stops trying, changes nothing further, writes the exact state to its log and shows the player one

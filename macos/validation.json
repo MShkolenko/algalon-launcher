@@ -10,8 +10,8 @@
   "strict_signatures": true,
   "real_game_launched": false,
   "system_trust_modified": false,
-  "self_update_implemented": false,
-  "scope": "Profile-separated baseline port; self-update installer not implemented",
+  "self_update_implemented": true,
+  "scope": "Profile-separated authenticated updater; production Mac feed activation remains pending",
   "baseline_live_client": "1.60.1.70532 arm64 release",
   "baseline_live_result": "Account/SRP, realm, one validated region key, character list, visual world, clean exit confirmed on 2026-10-26 in original1.0.3 build",
   "current_profile_port_live_run": false,
@@ -22,5 +22,13 @@
   "builder_home_paths_in_distributed_binaries": 0,
   "signing": "hardened ad-hoc",
   "notarized": false,
-  "clean_mac_install_tested": false
+  "clean_mac_install_tested": false,
+  "native_updater_fixture_pass_markers": 77,
+  "native_30_second_rollback": true,
+  "two_way_activation_and_parent_exit": true,
+  "retained_old_and_lock_controls": true,
+  "production_signed_manifest_https_read": true,
+  "untrusted_local_tls_refused_before_http": true,
+  "actual_signed_mac_feed_activation": false,
+  "current_version": "1.1.0(5)"
 }

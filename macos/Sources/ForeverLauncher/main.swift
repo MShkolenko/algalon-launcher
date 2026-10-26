@@ -3,6 +3,7 @@
 // Prepares and verifies a separate client, configures scoped user certificate trust, then launches
 // with a process-local DNS override and patches the realm key after Login. SIP stays enabled.
 import Foundation
+import Darwin
 import MachKeyStore
 
 // ---- logging ----------------------------------------------------------------------------------------
@@ -13,12 +14,16 @@ let logURL: URL = {
     return dir.appendingPathComponent("launcher.log")
 }()
 let logHandle: FileHandle? = {
-    if !FileManager.default.fileExists(atPath: logURL.path) {
-        FileManager.default.createFile(atPath: logURL.path, contents: nil)
+    // The old and new process overlap during activation; separate seek offsets lose log lines.
+    let descriptor = open(logURL.path, O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW | O_CLOEXEC, 0o600)
+    guard descriptor >= 0 else { return nil }
+    var status = stat()
+    guard fstat(descriptor, &status) == 0, status.st_mode & S_IFMT == S_IFREG,
+      status.st_uid == getuid(), status.st_nlink == 1 else {
+        close(descriptor)
+        return nil
     }
-    let h = try? FileHandle(forWritingTo: logURL)
-    _ = try? h?.seekToEnd()
-    return h
+    return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
 }()
 func log(_ s: String) {
     let df = DateFormatter(); df.dateFormat = "HH:mm:ss"
@@ -99,9 +104,46 @@ func patchLoop(pid: Int32, game: Process) -> Bool {
 
 // ---- entry ------------------------------------------------------------------------------------------
 guard geteuid() != 0 else { fail("Run the launcher as your normal macOS user.") }
-guard CommandLine.arguments.count == 1 else { fail("This launcher accepts no command-line options.") }
+let updateAttempt = UpdateAttempt(arguments: CommandLine.arguments)
+guard CommandLine.arguments.count == 1 || updateAttempt != nil else {
+    fail("Invalid launcher update arguments.")
+}
 
 log("\(C.longName) launcher starting")
+let launcherLock: LauncherLock
+let launcherApp = Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL
+do {
+    let directory = FileManager.default.homeDirectoryForCurrentUser
+      .appendingPathComponent("Library/Application Support/\(C.longName)")
+    try FileManager.default.createDirectory(
+      at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]
+    )
+    guard directory.resolvingSymlinksInPath().path == directory.path else {
+        throw UpdateError.installation
+    }
+    launcherLock = try LauncherLock(url: directory.appendingPathComponent("launcher.lock"))
+    guard launcherLock.acquire() else {
+        log("another launcher is already running")
+        exit(0)
+    }
+    if let updateAttempt {
+        guard logHandle != nil else { throw UpdateError.installation }
+        try acceptLauncherUpdate(updateAttempt, app: launcherApp)
+        log("launcher update activation completed")
+    } else {
+        do {
+            if try checkLauncherUpdate(app: launcherApp, lock: launcherLock, log: log) { exit(0) }
+        } catch UpdateError.recovery {
+            fail("Automatic launcher recovery could not finish. Close other launchers and rename "
+              + "\(launcherApp.path).old back to \(launcherApp.lastPathComponent). "
+              + "The retained launcher was not deleted.")
+        } catch {
+            log("no verified launcher update available; continuing with this version")
+        }
+    }
+} catch {
+    fail("Launcher startup or update activation failed. Any retained .old launcher was preserved.")
+}
 guard let client = locateClient() else {
     fail("Could not find the WoW client.\nExpected \(C.officialProduct)/\(C.appName) under /Applications/World of Warcraft (or set FOREVER_WOW).")
 }

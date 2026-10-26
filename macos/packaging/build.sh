@@ -51,4 +51,19 @@ codesign --force --options runtime --entitlements packaging/Launcher.entitlement
   --sign "$IDENTITY" "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
 lipo -info "$APP/Contents/MacOS/ForeverLauncher"
+ZIP="dist/${PROFILE}-launcher-macos.zip"
+# Schema 1 requires one app root; AppleDouble resource metadata would add __MACOSX entries.
+ditto -c -k --norsrc --keepParent "$APP" "$ZIP"
+python3 - "$ZIP" "$APP" <<'PYTHON'
+from pathlib import Path
+import sys
+import zipfile
+prefix = Path(sys.argv[2]).name + "/"
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    if not all(name.startswith(prefix) and ".." not in name.split("/")
+               for name in archive.namelist()):
+        raise SystemExit("Refusing an archive with entries outside its single application root")
+PYTHON
 echo "Built: $APP (profile: $PROFILE)"
+shasum -a 256 "$ZIP"
+stat -f 'ZIP bytes: %z' "$ZIP"
