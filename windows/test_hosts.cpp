@@ -1,6 +1,6 @@
 // Test of the launcher's hosts logic on sample files; never touches the real hosts file.
-// Build: cl /nologo /std:c++17 /EHsc /DUNICODE /D_UNICODE test_hosts.cpp /link /SUBSYSTEM:CONSOLE shell32.lib ole32.lib user32.lib crypt32.lib ws2_32.lib
-#include "algalon-launcher.cpp"
+// Build and run: test.cmd (builds against profiles/example).
+#include "forever-launcher.cpp"
 #include <iostream>
 
 static int fails = 0;
@@ -11,12 +11,12 @@ static void check(const char* name, bool ok) {
 
 static std::string rebuild(const std::string& raw, bool& right, bool& wrong, bool& encoded) {
     std::string out;
-    encoded = hosts_scan(raw, "algalon.actual.battle.net", right, wrong, "194.87.95.220", &out);
+    encoded = hosts_scan(raw, "example.actual.battle.net", right, wrong, "203.0.113.10", &out);
     return out;
 }
 
 int main() {
-    const std::string H = "algalon.actual.battle.net";
+    const std::string H = "example.actual.battle.net";
     bool r, w, e;
 
     // 1. ordinary ANSI hosts, a cp1251 Cyrillic comment, no line of ours: kept byte for byte
@@ -25,13 +25,13 @@ int main() {
     check("ansi kept byte for byte, nothing of ours", e && !r && !w && o == a);
 
     // 2. our host alone with an old address: the line goes
-    std::string b = "127.0.0.1 localhost\r\n192.168.0.240 algalon.actual.battle.net   # old\r\n";
+    std::string b = "127.0.0.1 localhost\r\n198.51.100.7 example.actual.battle.net   # old\r\n";
     o = rebuild(b, r, w, e);
     check("old address detected as wrong", e && !r && w);
     check("old line removed, other line kept", o == "127.0.0.1 localhost\r\n");
 
     // 3. our host shares a line with another name: the other name survives
-    std::string c = "10.0.0.1 router.local algalon.actual.battle.net other.lan # mine\r\n";
+    std::string c = "10.0.0.1 router.local example.actual.battle.net other.lan # mine\r\n";
     o = rebuild(c, r, w, e);
     check("shared line keeps the other names and the comment", o == "10.0.0.1 router.local other.lan # mine\r\n");
 
@@ -46,12 +46,12 @@ int main() {
     check("utf-16 refused", !e);
 
     // 6. already correct: right, nothing wrong
-    std::string g = "127.0.0.1 localhost\r\n194.87.95.220 algalon.actual.battle.net   # Algalon\r\n";
+    std::string g = "127.0.0.1 localhost\r\n203.0.113.10 example.actual.battle.net   # Example\r\n";
     o = rebuild(g, r, w, e);
     check("correct file recognized", e && r && !w);
 
     // 7. case-insensitive host, tab separated, IPv6 line untouched
-    std::string i = "::1 localhost\r\n1.2.3.4\tALGALON.actual.battle.net\r\n";
+    std::string i = "::1 localhost\r\n1.2.3.4\tEXAMPLE.actual.battle.net\r\n";
     o = rebuild(i, r, w, e);
     check("tab and case handled, IPv6 line kept", e && w && o == "::1 localhost\r\n");
 
@@ -63,7 +63,7 @@ int main() {
     // 9. overwrite_in_place on a temp copy keeps the file and replaces its content exactly
     wchar_t tmpdir[MAX_PATH];
     GetTempPathW(MAX_PATH, tmpdir);
-    wstr t = wstr(tmpdir) + L"algalon-hosts-test.txt";
+    wstr t = wstr(tmpdir) + L"example-hosts-test.txt";
     write_file(t, "a long original content line\r\nsecond\r\n");
     bool ow = overwrite_in_place(t, "short\r\n");
     std::string back;
@@ -88,7 +88,7 @@ int main() {
     DeleteFileW(t.c_str());
 
     // 9c. a read-only file can still be opened for reading (the path taken when hosts is already correct)
-    write_file(t, "194.87.95.220 algalon.actual.battle.net\r\n");
+    write_file(t, "203.0.113.10 example.actual.battle.net\r\n");
     SetFileAttributesW(t.c_str(), FILE_ATTRIBUTE_READONLY);
     HANDLE rw = CreateFileW(t.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     bool rw_refused = rw == INVALID_HANDLE_VALUE;
@@ -98,15 +98,15 @@ int main() {
     bool ro_ok = ro != INVALID_HANDLE_VALUE && handle_read_all(ro, ro_data);
     if (ro != INVALID_HANDLE_VALUE) CloseHandle(ro);
     bool r2, w2;
-    bool correct = ro_ok && hosts_scan(ro_data, "algalon.actual.battle.net", r2, w2, "194.87.95.220", nullptr) && r2 && !w2;
+    bool correct = ro_ok && hosts_scan(ro_data, "example.actual.battle.net", r2, w2, "203.0.113.10", nullptr) && r2 && !w2;
     check("read-only hosts refuses a write handle", rw_refused);
     check("read-only hosts is still read and found correct", correct);
     SetFileAttributesW(t.c_str(), FILE_ATTRIBUTE_NORMAL);
     DeleteFileW(t.c_str());
 
     // 10. argument validation for the elevated helper
-    check("valid args accepted", valid_setup_args(L"194.87.95.220", L"algalon.actual.battle.net"));
-    check("bad ip rejected", !valid_setup_args(L"194.87.95", L"algalon.actual.battle.net"));
+    check("valid args accepted", valid_setup_args(L"203.0.113.10", L"example.actual.battle.net"));
+    check("bad ip rejected", !valid_setup_args(L"203.0.113", L"example.actual.battle.net"));
     check("foreign host rejected", !valid_setup_args(L"1.2.3.4", L"evil.example.com"));
     check("host with space rejected", !valid_setup_args(L"1.2.3.4", L"a b.actual.battle.net"));
 

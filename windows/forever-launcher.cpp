@@ -1,10 +1,10 @@
-// algalon-launcher: starts the WoW Forever client against the Algalon realm. Windows only, Win32 API, statically
+// Forever launcher: starts the WoW Forever client against one private realm. Windows only, Win32 API, statically
 // linked: one small exe, nothing to install besides what it sets up itself. The scheme (operator, 2026-10-10):
-//   - the client keeps its own portal suffix: portal "algalon" becomes algalon.actual.battle.net;
+//   - the client keeps its own portal suffix: portal "<portal>" becomes <portal>.actual.battle.net;
 //   - one administrator prompt (only when something is missing) writes one hosts line pointing that name at our
-//     server and puts the Algalon Forever CA, name-constrained to algalon.actual.battle.net only, into the
-//     computer's trusted roots, so the server certificate validates (with its CRL on algaloncore.com);
-//   - a separate settings file WTF\Algalon.wtf carries the portal, the official Config.wtf is never touched, so
+//     server and puts the realm's own CA, name-constrained to <portal>.actual.battle.net only, into the
+//     computer's trusted roots, so the server certificate validates;
+//   - a separate settings file WTF\<config>.wtf carries the portal, the official Config.wtf is never touched, so
 //     starting the game from Battle.net still goes to the official servers;
 //   - while the client runs, the region group 8 key in its runtime key store is replaced with the server's public
 //     key (the store appears when the player presses Login). The client image itself is never modified.
@@ -24,6 +24,10 @@
 #include <vector>
 #include <map>
 
+// Everything that names one realm (server, portal, CA, names of its files and folders) comes from the profile the
+// build was given: build.cmd <profile> puts windows/profiles/<profile> on the include path.
+#include "profile.h"
+
 typedef std::wstring wstr;
 
 static const char* KNOWN_HEX[12] = {
@@ -36,35 +40,9 @@ static const char* KNOWN_HEX[12] = {
 static const unsigned char FLAGS[12] = {1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1};
 static const size_t ENTRY = 40, COUNT = 12;
 
-// Algalon Forever CA, 2026-10-10..2036-10-07, nameConstraints permitted DNS:algalon.actual.battle.net (critical),
-// SHA-1 9CD0509C3B0707141C4E04E93EE044DF9BF477CA. Its private key is kept offline.
-static const char CA_PEM[] =
-    "-----BEGIN CERTIFICATE-----\n"
-    "MIIEXjCCAsagAwIBAgIUHOlA6lGRtKqq5+4T0t8VJEroNkcwDQYJKoZIhvcNAQEL\n"
-    "BQAwLzEQMA4GA1UECgwHQWxnYWxvbjEbMBkGA1UEAwwSQWxnYWxvbiBGb3JldmVy\n"
-    "IENBMB4XDTI2MTAxMDA4MDgwMVoXDTM2MTAwNzA4MDgwMVowLzEQMA4GA1UECgwH\n"
-    "QWxnYWxvbjEbMBkGA1UEAwwSQWxnYWxvbiBGb3JldmVyIENBMIIBojANBgkqhkiG\n"
-    "9w0BAQEFAAOCAY8AMIIBigKCAYEAjNgcD3xk392v2XSVvMDbArPZaADNzsMr72ny\n"
-    "1nQqYvVOLu6XUR+KOJbEgGhs7pJ/BuyPJdDRohSZv26r/RWaJDdLclWbC+DLHAVG\n"
-    "m2hEwRQSR5rI0Pp/vcOX9tgd01MKRzxowSQtcqmq/cMNu7EYJZUx66XjSjsVuKU9\n"
-    "/XFdR45csFw9kA1kQVbyq/+JzFb8VtNEjzIVqqFlkNWTQV9P5DBZwJFweG4ZeZPG\n"
-    "Y+JIkm3SgfgXpkSzYWWo+Jvqd4lyyfW4KWrz7aRU7dRKLuvxhaDUXz2rnHIHH1cW\n"
-    "r5EWNK1JOUDF+XKzcFhJXbTZa7ekLVwOsZWLplpFLTYW0RkQqFky2JkaSNCN81bR\n"
-    "+JxDeyzW6e9AloLgqVXI9j2XO6/xUMT0eMaGBO2SYICpskF5FbbX8op7ctsJfBji\n"
-    "ETzehJcUflexl/MrjJqWBbPWQx0nDrS9Nn/3T0M1lDDNkCi/15Yiiam8N+S4FOri\n"
-    "ZenaE2UvA7a/OQrL0F4sbIoT1T9HAgMBAAGjcjBwMBIGA1UdEwEB/wQIMAYBAf8C\n"
-    "AQAwDgYDVR0PAQH/BAQDAgEGMCsGA1UdHgEB/wQhMB+gHTAbghlhbGdhbG9uLmFj\n"
-    "dHVhbC5iYXR0bGUubmV0MB0GA1UdDgQWBBReRt7URM2/rugTTgIJxgpAi5mn9jAN\n"
-    "BgkqhkiG9w0BAQsFAAOCAYEATpQkjBA2lVVmOgITXawbk3hvMijgQx9TfewkEkd+\n"
-    "XW0m0YoqW5pqMRQkTJyfsrxIm5QESWcBbiZ+uUhD63P4+MaBlThA/OUhwcZQzXHU\n"
-    "npc41zMXlZ4aiJHUeaNqO6kiWwI8eUeIKMljBPu6rX1Fm0+sUfgdMrnZ8JQoNuhM\n"
-    "QIrmd9x1OuBIqKweA9CMqr75YDUD5TG+wcc8Gif/DKqACY+ib+BRW2pPYOozJH1l\n"
-    "rZjBqVwagQ3AW3Vf69JBGlCCUgSyrqWl1S8wQyBNdz9ry5/rGBEaTD4X+wFOv5/I\n"
-    "3W6GVwkZHdds2Pld+WsoKxBo7a2xcAjC0sy3VSLUtEpIDQV1Ym4MHPSy8oDHVsZ9\n"
-    "nlbsE5KsUxVlL/OGgG6MH2BLNMAh6vU3w1pVMS5rqSn1490RYTGU482lssmaDSS0\n"
-    "Oa/b076cW03FHX0Lk8UZ9xq3wJfh56rPupp2CaVTKCZNXvTaNV12moKRtv++vsLd\n"
-    "/aFCnS4Z+urSeYDTUjqsuhXm\n"
-    "-----END CERTIFICATE-----\n";
+// The realm's CA (profile.h): its nameConstraints must permit only <portal>.actual.battle.net. Its private key is
+// never in the source or the launcher.
+static const char CA_PEM[] = REALM_CA_PEM;
 
 static const wchar_t* SUFFIX = L".actual.battle.net";
 // The client: the release "WoW: Forever" (Battle.net product wowf) is _forever_\Wow.exe; the old beta
@@ -74,11 +52,11 @@ static const wchar_t* SUFFIX = L".actual.battle.net";
 // always carries textLocale and audioLocale (see default_locale); with them the client keeps our portal.
 static const wchar_t* DEF_EXE = L"_forever_\\Wow.exe";
 static const wchar_t* KNOWN_EXES[] = {L"_forever_\\Wow.exe", L"_classic_beta_\\WowB.exe"};
-// The realm is reached through the VPS (algaloncore.com), which relays 1120 (login), 8082 (REST) and 8090 (world)
-// to the game server. The hosts line gets the address algaloncore.com resolves to at launch time.
-static const wchar_t* DEF_SERVER = L"algaloncore.com";
-static const wchar_t* DEF_PORTAL = L"algalon:1120";
-static const wchar_t* DEF_CONFIG = L"Algalon.wtf";
+// REALM_SERVER answers on 1120 (login), 8082 (REST) and 8090 (world). The hosts line gets the address it
+// resolves to at launch time.
+static const wchar_t* DEF_SERVER = REALM_SERVER;
+static const wchar_t* DEF_PORTAL = REALM_PORTAL L":1120";
+static const wchar_t* DEF_CONFIG = REALM_CONFIG;
 static const wchar_t* DEF_KEY = L"02596F0D0C061A8B30745988FD72C59E29EC367FB0F341F28E0F08D037BAFC69";  // stock TrinityCore
 static const int DEF_GROUP = 8;
 
@@ -98,7 +76,7 @@ static void say(const wchar_t* fmt, ...) {
     }
 }
 
-static wstr g_logdir;  // %LOCALAPPDATA%\Algalon Forever, or %TEMP%\Algalon Forever
+static wstr g_logdir;  // %LOCALAPPDATA%\<realm long name>, or %TEMP%\<realm long name>
 
 // `err` is passed by the caller from the failing call only; a logic error shows no stale Windows error code.
 static int fail(const wchar_t* msg, DWORD err = 0) {
@@ -110,7 +88,7 @@ static int fail(const wchar_t* msg, DWORD err = 0) {
         _snwprintf_s(text, 1600, _TRUNCATE, L"%s\n\nWindows error %lu: %s\nDetails: %s\\launcher.log", msg, err, sys, g_logdir.c_str());
     else
         _snwprintf_s(text, 1600, _TRUNCATE, L"%s\n\nDetails: %s\\launcher.log", msg, g_logdir.c_str());
-    MessageBoxW(nullptr, text, L"Algalon launcher", MB_OK | MB_ICONERROR);
+    MessageBoxW(nullptr, text, REALM_NAME L" launcher", MB_OK | MB_ICONERROR);
     return 1;
 }
 
@@ -118,10 +96,10 @@ static int fail(const wchar_t* msg, DWORD err = 0) {
 static wstr data_dir() {
     wchar_t base[MAX_PATH] = L"";
     wstr d;
-    if (GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH)) d = wstr(base) + L"\\Algalon Forever";
+    if (GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH)) d = wstr(base) + L"\\" REALM_LONG_NAME;
     if (d.empty() || (!CreateDirectoryW(d.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS)) {
         GetTempPathW(MAX_PATH, base);
-        d = wstr(base) + L"Algalon Forever";
+        d = wstr(base) + REALM_LONG_NAME;
         CreateDirectoryW(d.c_str(), nullptr);
     }
     return d;
@@ -158,7 +136,7 @@ static bool write_file(const wstr& p, const std::string& data) {
     return ok;
 }
 
-// Our own files only (launcher.ini, WTF\Algalon.wtf): write next to the target, then swap it in, so a failed write
+// Our own files only (launcher.ini, WTF\<config>.wtf): write next to the target, then swap it in, so a failed write
 // never leaves a half-written file. The hosts file never goes through here (see overwrite_in_place).
 static bool write_atomic(const wstr& p, const std::string& data, bool /*unused*/) {
     wstr tmp = p + L".tmp-launcher";
@@ -227,8 +205,8 @@ static Ini read_ini(const wstr& path) {
 }
 
 static bool write_ini(const wstr& path, const Ini& ini) {
-    wstr text = L"# algalon-launcher settings. client = the World of Warcraft folder (the one that holds _forever_),\n"
-                L"# server = the address algalon.actual.battle.net is pointed at in the hosts file.\n";
+    wstr text = L"# " REALM_ID L"-launcher settings. client = the World of Warcraft folder (the one that holds _forever_),\n"
+                L"# server = the address " REALM_PORTAL L".actual.battle.net is pointed at in the hosts file.\n";
     for (const auto& kv : ini) text += kv.first + L"=" + kv.second + L"\n";
     return write_atomic(path, to_utf8(text), false);
 }
@@ -402,7 +380,7 @@ enum SetupCode { SETUP_OK = 0, SETUP_UNREADABLE = 2, SETUP_ENCODING = 3, SETUP_B
 // backup is verified before the first byte is written; a failed or mismatched write is undone through the same
 // handle. Opening the file at all failing means it was never touched.
 static int hosts_fix(const wstr& ip, const wstr& host) {
-    HANDLE lock = CreateMutexW(nullptr, FALSE, L"Global\\AlgalonLauncherHostsEdit");
+    HANDLE lock = CreateMutexW(nullptr, FALSE, L"Global\\" REALM_MUTEX_ID L"LauncherHostsEdit");
     if (!lock || WaitForSingleObject(lock, 30000) == WAIT_TIMEOUT) {
         if (lock) CloseHandle(lock);
         return SETUP_LOCK;
@@ -428,13 +406,13 @@ static int hosts_fix(const wstr& ip, const wstr& host) {
     if (rc == SETUP_OK && !writable && !(right && !wrong)) rc = SETUP_WRITE;  // a change is needed but cannot be made
     if (rc == SETUP_OK && !(right && !wrong)) {
         if (!rebuilt.empty() && rebuilt.back() != '\n') rebuilt += "\r\n";
-        rebuilt += to_ascii(ip) + " " + to_ascii(host) + "   # Algalon Forever realm (algalon-launcher)\r\n";
+        rebuilt += to_ascii(ip) + " " + to_ascii(host) + "   # " REALM_LONG_NAME_A " realm (" REALM_ID_A "-launcher)\r\n";
         if (present) {
             SYSTEMTIME t;
             GetLocalTime(&t);
             wchar_t stamp[32];
             swprintf_s(stamp, L"%04d%02d%02d-%02d%02d%02d", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
-            wstr bak = path + L".bak-algalon-" + stamp;
+            wstr bak = path + L".bak-" REALM_ID L"-" + stamp;
             std::string check, back;
             if (!write_file(bak, raw) || !read_file(bak, check) || check != raw) rc = SETUP_BACKUP;
             else if (!(handle_write_all(h, rebuilt) && handle_read_all(h, back) && back == rebuilt)) {
@@ -473,8 +451,8 @@ static const wchar_t* setup_message(DWORD code) {
         case SETUP_WRITE: return L"the hosts file could not be written (read-only or locked by an antivirus); nothing was changed";
         case SETUP_VERIFY: return L"the hosts file did not read back as written; the original was put back, nothing changed";
         case SETUP_RESTORE: return L"writing the hosts file failed AND putting the original back failed. Copy the newest "
-                                   L"hosts.bak-algalon-* file in C:\\Windows\\System32\\drivers\\etc over hosts by hand";
-        case SETUP_CA: return L"the Algalon Forever certificate could not be added to the computer trusted roots";
+                                   L"hosts.bak-" REALM_ID L"-* file in C:\\Windows\\System32\\drivers\\etc over hosts by hand";
+        case SETUP_CA: return L"the " REALM_LONG_NAME L" certificate could not be added to the computer trusted roots";
         case SETUP_ARGS: return L"internal error: bad setup arguments";
         case SETUP_LOCK: return L"another launcher is changing the hosts file right now; try again in a moment";
         default: return L"setup was not completed (administrator rights declined?)";
@@ -658,18 +636,18 @@ static bool parse_hex(const wstr& hex, unsigned char* out, size_t n) {
 // leave the official game on our cache. The copy sits NEXT TO the official product folder, in the same World of
 // Warcraft folder:
 //   World of Warcraft\_forever_\                the official client (old beta: _classic_beta_), only read
-//   World of Warcraft\_forever_algalon_\        byte-identical copy without Cache, WTF, Logs, Errors; own Cache and WTF
+//   World of Warcraft\_forever_<id>_\            byte-identical copy without Cache, WTF, Logs, Errors; own Cache and WTF
 // so the copy finds the game data at the same path (..\Data). Measured on 2026-10-11: a copy elsewhere with a junction to
 // Data broke the official game, because the data store records the path it was opened through in Data\data\shmem and
 // refuses any other path ("Tact instance creation failed. Error (16): container locked"); with the sibling copy the
 // recorded path stays the official one, the official client starts after a copy session and its cache is unchanged.
 // The copy is rebuilt in <copy>.stage when the official build changes; Blizzard files are copied, never modified.
-// Deleting is only ever done inside the copy's own folders (<product>_algalon_*) and never follows a reparse point.
+// Deleting is only ever done inside the copy's own folders (<product>_<id>_*) and never follows a reparse point.
 
-// left out of the copy and of the manifests; algalon-client.txt is the copy's own marker, never in the official folder
+// left out of the copy and of the manifests; <id>-client.txt is the copy's own marker, never in the official folder
 static const wchar_t* COPY_SKIP[] = {L"Cache", L"WTF", L"Logs", L"Errors", L"Screenshots", L"WowB.exe.presuffix", L"Wow.exe.presuffix",
-                                     L"algalon-client.txt"};
-static const wchar_t* OWN_SUFFIX = L"algalon_";  // _forever_ -> _forever_algalon_ (_classic_beta_ -> _classic_beta_algalon_)
+                                     REALM_ID L"-client.txt"};
+static const wchar_t* OWN_SUFFIX = REALM_ID L"_";  // _forever_ -> _forever_<id>_ (_classic_beta_ -> _classic_beta_<id>_)
 
 // "SET key value" with any spaces or tabs: the key lowercased and the value without quotes. False for other lines.
 static bool parse_set(const wstr& line, wstr& key, wstr& value) {
@@ -799,7 +777,7 @@ static bool has_dotdot(const wstr& p) {
     return s.find(L"\\..\\") != wstr::npos;
 }
 
-// Recursive delete of one of the copy's own folders: `path` must be exactly <product>algalon_, .stage or .old. A
+// Recursive delete of one of the copy's own folders: `path` must be exactly <product><id>_, .stage or .old. A
 // reparse point is removed as a link and never entered.
 static bool delete_tree_in(const wstr& path, const wstr& base);
 static bool delete_own(const wstr& path, const wstr& own) {
@@ -1019,7 +997,7 @@ static void archive_official_wdb(const wstr& official_product) {
         if (!delete_tree_in(arch + L"\\" + sets[i], arch)) say(L"official cache archive: could not remove old set %s", sets[i].c_str());
 }
 
-// Makes sure <product>algalon_ (next to the official product folder) is a current, complete copy of the official
+// Makes sure <product><id>_ (next to the official product folder) is a current, complete copy of the official
 // client; returns its path, or empty and a reason. The previous copy is kept as <copy>.old until a session with the new
 // copy has succeeded (wWinMain removes it then).
 static wstr prepare_own_client(const wstr& root, const wstr& product, const wstr& exe_name, wstr& why) {
@@ -1029,7 +1007,7 @@ static wstr prepare_own_client(const wstr& root, const wstr& product, const wstr
     if (key.empty()) { why = L"cannot read the official client files"; return L""; }
     if (exists(stage) && !delete_own(stage, own)) { why = L"cannot remove an unfinished copy " + stage; return L""; }
     std::string have;
-    if (read_file(own + L"\\algalon-client.txt", have) && to_wide(have) == key) {
+    if (read_file(own + L"\\" REALM_ID L"-client.txt", have) && to_wide(have) == key) {
         std::vector<wstr> cur;  // the existing copy must still match the official files one for one
         if (manifest(own, L"", true, cur) && cur == mf) return own;
         say(L"own client: the copy no longer matches the official files, rebuilding");
@@ -1062,7 +1040,7 @@ static wstr prepare_own_client(const wstr& root, const wstr& product, const wstr
     if (ok && is_dir(own + L"\\WTF")) ok = copy_tree(own + L"\\WTF", wtf, false, unused);
     else if (ok && exists(product + L"\\WTF\\Config.wtf"))
         ok = CopyFileW((product + L"\\WTF\\Config.wtf").c_str(), (wtf + L"\\Config.wtf").c_str(), FALSE) != FALSE;
-    if (ok) ok = write_file(stage + L"\\algalon-client.txt", to_utf8(key));
+    if (ok) ok = write_file(stage + L"\\" REALM_ID L"-client.txt", to_utf8(key));
     if (!ok) {
         delete_own(stage, own);
         why = L"copying the client failed or the copy is incomplete (is Battle.net updating the game?)";
@@ -1114,18 +1092,18 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         return SETUP_OK;
     }
 
-    HANDLE single = CreateMutexW(nullptr, TRUE, L"Local\\AlgalonLauncher");
+    HANDLE single = CreateMutexW(nullptr, TRUE, L"Local\\" REALM_MUTEX_ID L"Launcher");
     if (single && GetLastError() == ERROR_ALREADY_EXISTS) {
-        MessageBoxW(nullptr, L"The Algalon launcher is already running.", L"Algalon launcher", MB_OK | MB_ICONINFORMATION);
+        MessageBoxW(nullptr, L"The " REALM_NAME L" launcher is already running.", REALM_NAME L" launcher", MB_OK | MB_ICONINFORMATION);
         return 0;
     }
 
     wchar_t selfbuf[MAX_PATH];
     GetModuleFileNameW(nullptr, selfbuf, MAX_PATH);
     wstr self = selfbuf;
-    say(L"algalon-launcher start (%s)", self.c_str());
+    say(REALM_ID L"-launcher start (%s)", self.c_str());
 
-    // 1. settings, in %LOCALAPPDATA%\Algalon Forever (the exe may sit in a read-only folder)
+    // 1. settings, in %LOCALAPPDATA%\<realm long name> (the exe may sit in a read-only folder)
     wstr ini_path = g_logdir + L"\\launcher.ini";
     Ini ini = read_ini(ini_path);
     const std::pair<const wchar_t*, wstr> defaults[] = {{L"exe", DEF_EXE},       {L"server", DEF_SERVER},
@@ -1208,9 +1186,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     // 2-3. hosts line and the CA in the computer's trusted roots: one administrator prompt, only when needed
     bool hosts_good = hosts_ok(server_ip, host), ca_good = ca_in_machine_store();
     if (hosts_good && ca_good) {
-        say(L"setup: %s points at %s, Algalon Forever CA trusted", host.c_str(), server_ip.c_str());
+        say(L"setup: %s points at %s, " REALM_LONG_NAME L" CA trusted", host.c_str(), server_ip.c_str());
     } else {
-        say(L"setup: asking for administrator rights once (hosts line%s)", ca_good ? L"" : L" and the Algalon Forever CA");
+        say(L"setup: asking for administrator rights once (hosts line%s)", ca_good ? L"" : L" and the " REALM_LONG_NAME L" CA");
         DWORD code = setup_elevate(self, server_ip, host);
         if (code != SETUP_OK) return fail(setup_message(code));
         if (!hosts_ok(server_ip, host) || !ca_in_machine_store()) return fail(L"setup reported success but the check after it failed");
@@ -1273,7 +1251,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             TerminateProcess(pi.hProcess, 3);
             CloseHandle(pi.hProcess);
             say(L"GUARD: the game began a login at %s, not %s; it was closed", seen.c_str(), expect_host.c_str());
-            return fail((L"The game tried to log in at " + seen + L" instead of the Algalon realm (" + expect_host +
+            return fail((L"The game tried to log in at " + seen + L" instead of the " REALM_NAME L" realm (" + expect_host +
                          L"), so the launcher closed it before your password was sent.\n\nStart the launcher again. If this repeats, "
                          L"send launcher.log.").c_str());
         }
@@ -1302,7 +1280,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         if (delete_own(own_old, own)) say(L"own client: previous copy removed");
     }
     if (patch_failed && !patched)
-        return fail(L"The game found its key store but the launcher could not set the Algalon server key in it, so the "
-                    L"login to Algalon could not succeed. Run the launcher again; if it repeats, send launcher.log.");
+        return fail(L"The game found its key store but the launcher could not set the " REALM_NAME L" server key in it, so the "
+                    L"login to " REALM_NAME L" could not succeed. Run the launcher again; if it repeats, send launcher.log.");
     return 0;
 }

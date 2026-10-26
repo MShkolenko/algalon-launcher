@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Draw the launcher icon (operator's choice 2026-10-10: variant 2, the spiked frame) into algalon.ico.
+"""Draw the launcher icon (operator's choice 2026-10-10: variant 2, the spiked frame) into icon.ico.
 
 WoW-style badge without Blizzard's mark: beveled gold ring with eight gold spikes, a blue-green globe, a two-level
 gold letter A (Algalon). Drawn once at 1024 px and downscaled, so every size is antialiased.
@@ -45,6 +45,6 @@ d.polygon(P((55, 30), (74, 79), (67, 79), (62, 66), (48, 66), (43, 79), (36, 79)
 d.polygon(P((55, 46), (59, 59), (51, 59)), fill="#1f6fb0")
 
 big = img.resize((256, 256), Image.LANCZOS)
-big.save(f"{OUT}/algalon.ico", sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+big.save(f"{OUT}/icon.ico", sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
 big.save(f"{OUT}/algalon-icon-256.png")
-print("wrote algalon.ico and algalon-icon-256.png")
+print("wrote icon.ico and algalon-icon-256.png")
