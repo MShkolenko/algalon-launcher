@@ -1,0 +1,2 @@
+// Launcher resources: the icon shown on the exe and its shortcut (variant 2, the spiked frame, make_icon.py).
+1 ICON "algalon.ico"
