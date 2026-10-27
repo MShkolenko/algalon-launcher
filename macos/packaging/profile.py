@@ -60,6 +60,12 @@ def generate(profile):
         "caPem": pem, "updateRepository": string("REALM_UPDATE_REPO"),
         "updatePublicKey": string("REALM_UPDATE_PUBKEY"),
     }
+    script_header = (root.parent / "shared" / "login_script.h").read_text()
+    script = re.fullmatch(r'.*R"lua\((.*)\)lua";\s*', script_header, re.DOTALL)
+    if not script or any(script.group(1).count(token) != 1
+                         for token in ["@@ACCOUNT@@", "@@PASSWORD@@"]):
+        raise ValueError("invalid shared login script template")
+    values["loginScriptTemplate"] = script.group(1)
     public_key = values["updatePublicKey"]
     if public_key and not re.fullmatch(r"[0-9A-Fa-f]{128}", public_key):
         raise ValueError("invalid update public key")

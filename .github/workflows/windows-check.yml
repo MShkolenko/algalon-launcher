@@ -1,0 +1,26 @@
+name: Windows native checks
+on:
+  push:
+    branches: [main]
+    paths: ['windows/**', 'shared/**', '.github/workflows/windows-check.yml']
+  pull_request:
+    paths: ['windows/**', 'shared/**', '.github/workflows/windows-check.yml']
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Exercise native stores, host handling and updater recovery
+        working-directory: windows
+        shell: cmd
+        run: call test.cmd
+      - name: Build Algalon
+        working-directory: windows
+        shell: cmd
+        run: call build.cmd algalon
+      - name: Build example profile
+        working-directory: windows
+        shell: cmd
+        run: call build.cmd example
