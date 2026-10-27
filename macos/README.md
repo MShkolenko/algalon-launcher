@@ -4,6 +4,9 @@ Native Swift/C launcher for the macOS release client. This is the profile-separa
 working Mac baseline, licensed under this repository's MIT license with the operator's explicit
 consent. No game files, credentials, session proofs, private signing keys or raw logs are included.
 
+See [remembered server login](../docs/saved-login.md) for the native login form,
+Keychain storage, optional macOS14 autofill permissions and current acceptance limits.
+
 ## Profiles and build
 
 The canonical realm inputs are `../windows/profiles/<name>/profile.h`: server, portal, private
@@ -68,7 +71,8 @@ into the official product. Backups and staged-copy recovery remain in the copy t
 The private configuration retains unrelated preferences and exactly one portal, text locale and
 audio locale. Valid private locales take priority, followed by official locales, the active `wowf`
 build tags, and `enUS`. Both locales are seeded before first launch to avoid the region chooser
-overwriting the portal. Credentials are entered only in the game.
+overwriting the portal. Credentials are entered in the native launcher form or
+manually in the game; optional storage uses the login Keychain, never Config.wtf.
 
 ## Network and trust boundaries
 
