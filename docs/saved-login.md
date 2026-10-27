@@ -64,6 +64,10 @@ Current result: native Keychain checks pass and both Mac architectures compile
 (both actual Mach-O minimum versions are macOS 12.0). The existing smoke suite
 stopped at its running-game exclusion while the operator's game remained open;
 it has not been accepted as a passed regression run for this branch.
-Windows execution, native credential dialogs, actual release-client script
-acceptance, saved-entry login and update-to-new-binary Keychain access are pending.
+The [Windows native CI run](https://github.com/MShkolenko/algalon-launcher/actions/runs/40519196006)
+on source `bde6e3c36669b4744073018a12c8d4b835068caa` passed actual CredMan CRUD,
+host/updater tests and both Algalon/example builds. This is a hosted Windows
+runner result, not an interactive game-login test on the operator's Windows PC.
+Native credential dialogs, actual release-client script acceptance, saved-entry
+login and update-to-new-binary Keychain access are pending.
 The working installed launcher/release assets are unchanged.
