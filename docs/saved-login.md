@@ -1,73 +1,98 @@
-# Remembered login: implementation checkpoint
+# Remembered server login
 
-This branch is a work in progress. The existing launcher startup does **not** call
-the new credential dialog or pass the candidate glue script to the game yet.
-Do not release it as working autofill until the actual release client test passes.
+The Mac candidate adds a native Swift/AppKit form with account, secure password,
+Remember on this Mac, Play, Manual Login, Cancel and Forget Saved Login. It fills
+only the isolated client. Log In remains an explicit action in WoW.
 
-The operator requested the same optional remembered-login behavior on macOS and
-Windows. Native storage and UI adapters live in this one canonical repository;
-`shared/login_script.h` is the single candidate implementation for filling the
-game fields. It never clicks Log In, changes the portal or disables verification.
+The native Mac path passed field targeting, saved-entry relaunch, account/realm
+authentication and visual world loading on client1.60.1.70630 on2026-10-27.
+See [the acceptance record](../macos/reports/2026-10-27-native-login.md) for the
+successful run, a separate realm disconnect and remaining distribution limits.
 
-## Native storage
+## Storage and exact input
 
-- macOS uses SecItem generic passwords in the user's login Keychain. The current
-  launcher is ad-hoc signed and has no provisioning profile authorizing a Data
-  Protection Keychain access group. It does not broaden the default Keychain ACL.
-  A later changed ad-hoc binary may require a native Keychain confirmation.
-- Windows uses generic credentials through CredReadW/CredWriteW/CredDeleteW.
-  These are standard Win32 APIs, with no additional library installation.
-  `CRED_PERSIST_LOCAL_MACHINE` persists for the current Windows user on this PC;
-  it does not share the entry with other Windows users.
-- The production caller must supply a stable service/target scoped to the chosen
-  launcher profile and realm. There is one saved account per realm.
-- Passwords are preserved exactly, including leading/trailing punctuation and
-  whitespace. Control characters are rejected. Account length is at most 320
-  UTF-16 code units; password length is at most 128, matching the current UI limit.
-- Remember is explicit. Manual login/cancel preserves an existing saved entry.
-  Forget or disabling Remember removes only this launcher's exact realm entry.
-  An OS-store error retains the entry and permits manual game login.
-- No actual operator account, password or other runtime authentication material
-  belongs in source, logs, tests, release notes or build inputs. Tests use only
-  disposable fictional records and remove those exact records afterward.
+macOS uses SecItem generic passwords in the user's login Keychain, scoped to the
+profile and realm. Remember is optional. Cancel and Manual Login retain a saved
+entry; Forget or submitting with Remember disabled removes only the exact realm
+entry. Store failures retain the record and offer manual login. Passwords are
+preserved exactly, including punctuation and whitespace. Control characters are
+rejected; limits are320 account and128 password UTF-16 units.
 
-## Candidate client input path — not accepted yet
+Very long or visually ambiguous account names can fail screen readback safely; use
+Manual Login in that case. Wait for filling to finish before interacting with WoW.
 
-The current client binary's usage text advertises `-gluescript` and
-`-gluescriptFile`; the extracted Classic GlueXML uses
-`AccountLogin.UI.AccountEditBox` and `.PasswordEditBox`. This is evidence for a
-candidate, **not proof that the release client's flags execute scripts**.
+No credentials are written into arguments, environment variables, configuration,
+logs, source, screenshots, tests or build inputs. Saved credentials are held in
+the OS Keychain and transient process memory. The launcher does not use the
+clipboard to fill WoW.
 
-The candidate fills those fields once when visible and stops watching after 30s.
-It never submits authentication or changes game data. Native renderers use
-three-digit decimal UTF-8 escapes so quotes, backslashes and Unicode remain data.
-The operator accepts the simpler startup-argument approach: escaped credentials
-would still be recoverable from the private game's process arguments while it
-runs. Escaping is not encryption. Do not claim they stay exclusively in Keychain
-or Credential Manager if this path is adopted.
+Default distribution builds are ad-hoc signed and lack a provisioning-profile-authorized
+Data Protection Keychain access group. They use the file-based login Keychain
+with its default application access controls. A changed ad-hoc binary has a new
+hash-based identity and can require Keychain/TCC approval again. Always Allow
+for one binary is not a stable release-signing identity. Do not broaden ACLs,
+add arbitrary trusted applications, or disable OS checks to suppress prompts.
+The installed local candidate uses an existing Apple Development identity; its
+stable designated requirement survived changed builds and repeated launches without
+new Keychain prompts. That personal-signed application is not distributed.
+A stable Developer ID release-signing identity remains an owner distribution
+prerequisite; it is separate from signing the update manifest.
 
-First use only fictional data, verify the displayed account and exact masked
-password length, and do not submit a login. If the native flags are unavailable,
-keep them disconnected; do not disable GlueXML integrity, signature, TLS or
-certificate checks to enable them. Real-account acceptance and a fresh launch
-from a saved entry follow only after the input path is proven.
+## Native Mac field filling
 
-## Validation checkpoint
+Automatic filling requires macOS14 or later plus the launcher's own Accessibility
+and Screen Recording permissions. macOS12/13 retain manual login. Missing rights
+are shown explicitly, with retry/manual/cancel paths; the launcher does not silently
+exit after a failed preflight. No permission is granted programmatically.
 
-`bash macos/Tests/run-login.sh` exercises actual Keychain create/read/update/delete,
-realm separation, invalid input rejection, exact Unicode/punctuation and Lua
-escaping. It disables interaction only in its own test process. The corresponding
-Windows test exercises the real Credential Manager and is included in
-`windows/test.cmd` and the Windows native-check workflow.
+ScreenCaptureKit captures only the selected private game window, at bounded
+resolution, without audio. Vision processes images locally and returns only the
+four fixed English/Russian login labels plus exact expected-account match positions.
+Images and arbitrary OCR text are not
+saved or transmitted. Geometry must be unique, ordered and aligned. Before every
+click/key event, the native process path, PID, foreground application and current
+permissions must match. Mouse input goes through WindowServer HID with an
+additional topmost window-ID/PID/bounds check. Keyboard input uses PID-targeted
+CoreGraphics Unicode events. A correct remembered account is retained. Otherwise,
+a nonsecret marker must first appear in the account field before the real account
+is entered and read back. A second nonsecret probe checks that the account stays
+unchanged after focusing the password field, before any secret is typed. The final
+account readback must still match. A failed readback clears the focused field
+and stops filling. Filling waits at most90seconds for the recognized screen.
+A target/focus/permission change stops input; the saved entry is retained.
 
-Current result: native Keychain checks pass and both Mac architectures compile
-(both actual Mach-O minimum versions are macOS 12.0). The existing smoke suite
-stopped at its running-game exclusion while the operator's game remained open;
-it has not been accepted as a passed regression run for this branch.
-The [Windows native CI run](https://github.com/MShkolenko/algalon-launcher/actions/runs/40519196006)
-on source `bde6e3c36669b4744073018a12c8d4b835068caa` passed actual CredMan CRUD,
-host/updater tests and both Algalon/example builds. This is a hosted Windows
-runner result, not an interactive game-login test on the operator's Windows PC.
-Native credential dialogs, actual release-client script acceptance, saved-entry
-login and update-to-new-binary Keychain access are pending.
-The working installed launcher/release assets are unchanged.
+The native form uses a nonblocking modal session within the AppKit event loop.
+A hidden permission dialog or a blocking modal on the async main executor must
+not stall Play. There is no resident login observer after filling finishes.
+
+The advertised client glue-script arguments failed actual stock-client controls;
+the unused prototype renderers/template have been removed. Client integrity,
+TLS/name checks, official-client isolation and existing updater checks remain.
+
+## Windows scope
+
+The same repository contains native C++ CredMan storage and credential UI adapters.
+Generic credentials use CredReadW/CredWriteW/CredDeleteW for the current Windows
+user on this PC. The adapters are not yet connected to Windows game input.
+Do not claim working Windows autofill or ship invented client flags.
+
+## Validation
+
+Run `bash macos/Tests/run-login.sh` for actual disposable Keychain CRUD/update/delete,
+exact Unicode/punctuation, invalid records, realm separation and label/layout
+admission controls. The test process alone disables Keychain interaction and
+removes only its own fictional entries. Run the existing smoke and updater suites
+before delivery; build and verify both architecture slices and signatures.
+
+The native Windows CI run40519196006 on sourcebde6e3c passed real CredMan CRUD,
+host/updater controls and both profile builds. It is hosted-runner evidence,
+not interactive Windows game acceptance. Later changes need their own CI result.
+
+Mac candidate1.2.0(8) was exercised with the native form, granted permissions,
+distinct-account readback, a nonsecret password-focus control and repeated saved-
+entry launch. Intended-account SRP and realm authentication, one key installation,
+character list, world/spell loading100% and normal exit passed at21:32–21:34MSK.
+One earlier run authenticated the account but disconnected at the realm stage;
+the cause is open and is not attributed to password filling without evidence.
+Windows interactive filling, clean-Mac installation, Intel/old-OS execution and
+notarized distribution are not established by these Mac results.

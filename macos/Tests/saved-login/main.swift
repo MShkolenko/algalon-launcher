@@ -17,14 +17,46 @@ func check(_ value: Bool) {
   precondition(value, "saved-login contract failed")
 }
 
+let labels: [LoginLabel: [CGRect]] = [
+  .account: [CGRect(x: 0.4, y: 0.27, width: 0.2, height: 0.025)],
+  .password: [CGRect(x: 0.46, y: 0.34, width: 0.08, height: 0.025)],
+  .remember: [CGRect(x: 0.4, y: 0.4, width: 0.2, height: 0.025)],
+  .login: [CGRect(x: 0.46, y: 0.46, width: 0.08, height: 0.025)],
+]
+let layout = LoginLayout(labels: labels)
+check(layout != nil && abs(layout!.account.y - 0.3175) < 0.00001)
+check(abs(layout!.password.y - 0.3825) < 0.00001)
+let offsetFrame = CGRect(x: -1200, y: 90, width: 1000, height: 700)
+let content = CGRect(x: 0, y: 20, width: 1000, height: 680)
+let screen = layout!.screenPoint(layout!.password, frame: offsetFrame, content: content)
+check(screen != nil && abs(screen!.x + 700) < 0.00001
+  && abs(screen!.y - 370.1) < 0.00001)
+check(layout!.screenPoint(layout!.password, frame: offsetFrame,
+  content: CGRect(x: 0, y: 0, width: 1001.1, height: 700)) == nil)
+for kind in LoginLabel.allCases {
+  var missing = labels
+  missing[kind] = []
+  check(LoginLayout(labels: missing) == nil)
+  missing[kind] = [labels[kind]![0], labels[kind]![0]]
+  check(LoginLayout(labels: missing) == nil)
+}
+var wrong = labels
+wrong[.password] = labels[.login]
+check(LoginLayout(labels: wrong) == nil)
+wrong = labels
+wrong[.password] = [CGRect(x: 0.1, y: 0.34, width: 0.08, height: 0.025)]
+check(LoginLayout(labels: wrong) == nil)
+wrong = labels
+wrong[.account] = [CGRect(x: 0.4, y: 0.27, width: CGFloat.infinity, height: 0.025)]
+check(LoginLayout(labels: wrong) == nil)
+check(LoginLabel(text: "Email or Phone") == .account && LoginLabel(text: "Пароль") == .password)
+check(LoginLabel(text: "Character Selection") == nil)
+
 let first = SavedLogin(account: "fictional@example.invalid", password: "Ab12\"\\.é")
 let second = SavedLogin(account: "other@example.invalid", password: "Replacement.")
 check(first.isValid && second.isValid)
 check(SavedLogin(account: "fake", password: String(repeating: "x", count: 128)).isValid)
 check(!SavedLogin(account: "fake", password: String(repeating: "x", count: 129)).isValid)
-let script = try loginGlueScript(SavedLogin(account: "Ab12", password: "'\\é."))
-check(script.contains("local account, password = '\\065\\098\\049\\050', '\\039\\092\\195\\169\\046'"))
-check(!script.contains("@@") && !script.contains("\""))
 for bad in [
   SavedLogin(account: "", password: "abc"),
   SavedLogin(account: "fake", password: ""),
@@ -61,7 +93,7 @@ do {
   try forgetSavedLogin(service: service)
   try forgetSavedLogin(service: service)
   check(try readSavedLogin(service: service) == nil)
-  print("PASS: real Keychain CRUD, exact Unicode/password punctuation, validation, realm isolation, Lua escaping")
+  print("PASS: real Keychain CRUD, exact Unicode/password punctuation, validation, realm isolation, layout admission")
 } catch SavedLoginError.keychain(let status) {
   fputs("Keychain test unavailable without interaction (status \(status)); not a pass.\n", stderr)
   exit(2)

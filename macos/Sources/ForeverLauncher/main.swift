@@ -2,8 +2,9 @@
 //
 // Prepares and verifies a separate client, configures scoped user certificate trust, then launches
 // with a process-local DNS override and patches the realm key after Login. SIP stays enabled.
-import Foundation
+import AppKit
 import Darwin
+import Foundation
 import MachKeyStore
 
 // ---- logging ----------------------------------------------------------------------------------------
@@ -164,23 +165,71 @@ if setupNeeded() {
     log("realm CA already in place; DNS override is private to this client")
 }
 
-let session: (process: Process, guardLog: ConnectionGuard)
-do {
-    let library = Bundle.main.bundleURL
-      .appendingPathComponent("Contents/Frameworks/libRealmDNS.dylib")
-    session = try launchClient(client, serverIP: ip, resolverLibrary: library, log: log)
-} catch { fail("Launching the client failed: \(error)") }
+Task { @MainActor in
+  let session: (process: Process, guardLog: ConnectionGuard)
+  var loginForLaunch: SavedLogin?
+  switch await chooseSavedLogin(service: "com.algaloncore.launcher.login.\(C.id).\(C.hostName)",
+                         realm: C.longName) {
+  case .fill(let login):
+      switch await automaticLoginPermissions(log: log) {
+      case .automatic:
+          log("automatic filling selected")
+          loginForLaunch = login
+      case .manual:
+          log("manual filling selected after permission check")
+          break
+      case .cancel:
+          log("cancelled at permission check")
+          exit(0)
+      }
+  case .manual:
+      log("manual login selected")
+      break
+  case .cancel:
+      log("login cancelled")
+      exit(0)
+  }
+  NSApplication.shared.hide(nil)
+  do {
+      let library = Bundle.main.bundleURL
+        .appendingPathComponent("Contents/Frameworks/libRealmDNS.dylib")
+      session = try launchClient(client, serverIP: ip, resolverLibrary: library, log: log)
+  } catch { fail("Launching the client failed: \(error)") }
 
-let game = session.process
-let patched = patchLoop(pid: game.processIdentifier, game: game)
-game.waitUntilExit()
-if session.guardLog.finish() {
-    fail("Stopped the private client: its login endpoint changed or the fresh connection log "
-      + "could not be monitored. Check the private portal before retrying.")
+  let game = session.process
+  if let login = loginForLaunch {
+      do {
+          try await fillPrivateLogin(login, pid: game.processIdentifier,
+                                   executable: realPath(client.privateBinary), log: log)
+          log("automatic login fields filled; Log In remains an explicit action")
+      } catch {
+        let reason = (error as? AutomaticLoginError)?.rawValue ?? "native capture error"
+        log("automatic login filling did not complete (\(reason)); saved entry retained")
+        NSApplication.shared.unhide(nil)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Automatic filling stopped"
+        alert.informativeText = "The saved login was retained. Check the game window before "
+          + "entering the server. Details are in the launcher log."
+        _ = await presentLoginAlert(alert)
+        NSApplication.shared.hide(nil)
+      }
+  }
+  loginForLaunch = nil
+  let patched = patchLoop(pid: game.processIdentifier, game: game)
+  game.waitUntilExit()
+  if session.guardLog.finish() {
+      fail("Stopped the private client: its login endpoint changed or the fresh connection log "
+        + "could not be monitored. Check the private portal before retrying.")
+  }
+  if !patched {
+      log("client exited without a completed realm login; no region-key installation confirmed")
+  }
+  if game.terminationReason != .exit || game.terminationStatus != 0 {
+      fail("The private client exited abnormally. Check its Connection.log and crash report.")
+  }
+  log("done")
+
+  exit(0)
 }
-if !patched {
-    fail("The client exited without a confirmed region-key installation. "
-      + "A failed login ends before the realm-key stage; this message alone does not establish "
-      + "key-table incompatibility. Check the private client's Connection.log for the first error.")
-}
-log("done")
+NSApplication.shared.run()

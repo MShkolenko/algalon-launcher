@@ -1,7 +1,7 @@
 import Foundation
 import Security
 
-struct SavedLogin: Codable, Equatable {
+struct SavedLogin: Codable, Equatable, Sendable {
   let account: String
   let password: String
 

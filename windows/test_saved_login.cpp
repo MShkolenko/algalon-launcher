@@ -1,4 +1,4 @@
-#include "login_script.h"
+#include "saved_login.h"
 #include "saved_login_ui.h"
 #include <cstdio>
 
@@ -17,10 +17,6 @@ int main() {
     check(saved_login::valid(first));
     check(saved_login::valid({L"fake", std::wstring(128, L'x')}));
     check(!saved_login::valid({L"fake", std::wstring(129, L'x')}));
-    const auto script = saved_login::glue_script({L"Ab12", L"'\\\u00e9."});
-    check(script.find("local account, password = '\\065\\098\\049\\050', '\\039\\092\\195\\169\\046'")
-          != std::string::npos);
-    check(script.find("@@") == std::string::npos && script.find('"') == std::string::npos);
     check(!saved_login::valid({L"", L"abc"}));
     check(!saved_login::valid({L"fake", L""}));
     check(!saved_login::valid({L"fake", L"abc\n"}));
