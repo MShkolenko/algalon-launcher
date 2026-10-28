@@ -1065,6 +1065,7 @@ static wstr prepare_own_client(const wstr& root, const wstr& product, const wstr
 }
 
 #include "updater.h"
+#include "saved_login_ui.h"
 
 // ---- main -------------------------------------------------------------------------------------------------------
 
@@ -1242,25 +1243,53 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         say(L"setup: done");
     }
 
-    // 4. our own settings file: a copy of Config.wtf with our portal; Config.wtf itself stays as Blizzard left it
+    // 3a. saved login (docs/saved-login.md): the account goes into the settings file below, the password is filled by
+    // autofill.h only after it proves the masked password field has the focus. Cancel means manual login.
+    const wstr cred_target = L"" REALM_LONG_NAME L"/" + ini[L"portal"];
+    saved_login::Login login;
+    bool fill = false;
+    if (!ini.count(L"saved_login") || ini[L"saved_login"] != L"0") {
+        DWORD lc = saved_login::choose(cred_target, REALM_NAME, login, fill);
+        if (lc != ERROR_SUCCESS) {
+            say(L"saved login: not used (error %lu), manual login", lc);
+            fill = false;
+        } else if (fill && login.account.find_first_of(L"\"\\") != wstr::npos) {
+            say(L"saved login: the account contains a quote or backslash and cannot go into the settings file, manual login");
+            fill = false;
+        }
+        say(L"saved login: %s", fill ? L"account prefilled, password autofill armed" : L"manual login");
+    }
+    if (!fill) {
+        SecureZeroMemory(&login.password[0], login.password.size() * sizeof(wchar_t));
+        login = {};
+    }
+
+    // 4. our own settings file with our portal; Config.wtf itself stays as Blizzard left it. In the own copy the base is
+    // our file itself when it exists (the client saves its settings there on exit, the copy has no Config.wtf); before,
+    // it was rebuilt from nothing on every start and the player's settings were lost. Otherwise the base is Config.wtf.
     wstr wtf = product + L"\\WTF";
     CreateDirectoryW(wtf.c_str(), nullptr);
     std::string raw;
-    wstr cfg = wtf + L"\\Config.wtf";
-    if (exists(cfg) && !read_file(cfg, raw)) return fail(L"Config.wtf exists but cannot be read; close the game and try again", GetLastError());
-    if (raw.empty()) say(L"settings: no Config.wtf yet, the client starts with its defaults");
+    wstr own_cfg = wtf + L"\\" + ini[L"config"];
+    wstr cfg = own_client && exists(own_cfg) ? own_cfg : wtf + L"\\Config.wtf";
+    if (exists(cfg) && !read_file(cfg, raw)) return fail(L"the game settings file exists but cannot be read; close the game and try again", GetLastError());
+    if (raw.empty()) say(L"settings: no saved settings yet, the client starts with its defaults");
+    else say(L"settings: based on %s", cfg.c_str());
     // Exactly one portal, textLocale and audioLocale line in the end (any spacing in the source, last value wins for the
     // locales). A config without a locale makes the release client open its region picker and reset the portal.
+    // With a saved login, exactly one accountName line carries the saved account and the client's accountList is dropped
+    // so an old list cannot contradict it.
     wstr text, have_text, have_audio;
     for (const wstr& line : lines_of(to_wide(raw))) {
         wstr k, v;
-        if (parse_set(line, k, v) && (k == L"portal" || k == L"textlocale" || k == L"audiolocale")) {
+        if (parse_set(line, k, v) && (k == L"portal" || k == L"textlocale" || k == L"audiolocale" || (fill && (k == L"accountname" || k == L"accountlist")))) {
             if (k == L"textlocale") have_text = v;
             if (k == L"audiolocale") have_audio = v;
             continue;
         }
         text += line + L"\r\n";
     }
+    if (fill) text += L"SET accountName \"" + login.account + L"\"\r\n";
     wstr loc = ini.count(L"locale") && !ini[L"locale"].empty() ? ini[L"locale"] : default_locale(client, product);
     if (have_text.empty()) have_text = loc;
     if (have_audio.empty()) have_audio = loc;
