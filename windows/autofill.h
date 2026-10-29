@@ -15,7 +15,8 @@
 // Known limit, accepted by the operator (2026-10-29): this is evidence from the screen, not a field-level interface of
 // the client; if the game moved its own focus between the probe and the typing, the password would follow it. The
 // login screen has no reason to, but it cannot be proven from outside. Test with a fictional password first.
-// Any doubt means no password is typed and the player types it. Enter is never pressed. If the player starts a login
+// Any doubt means no password is typed and the player types it. Enter is pressed only right after the whole password
+// went into the confirmed field with every check passing (full auto-login, operator 2026-10-29). If the player starts a login
 // by hand (Connection.log, which the launcher deletes before the client starts, so it holds only this run), autofill
 // stops.
 #pragma once
@@ -587,16 +588,22 @@ static void run(Job& job) {
             Sleep(25);
         }
         Sleep(200);
-        g_guard = false;
         if (typed != job.password.s.size()) {
+            g_guard = false;
             // no blind cleanup: where the focus is now is not known
             sayf(job, L"autofill: stopped after %zu of %zu characters (the game lost the front, the desktop changed, "
                       L"a key was held or other input came); clear the password field and type it yourself",
                  typed, job.password.s.size());
             return;
         }
-        sayf(job, L"autofill: password filled (%zu characters) %llu s after the launcher started the game, on probe "
-                  L"%d; press Log In in the game", typed, (unsigned long long)elapsed(), attempt);
+        // full auto-login (operator, 2026-10-29): Enter in the confirmed password field submits the login form; the
+        // input guard is still on, so nothing outside could have moved the focus since the last character
+        bool entered = can_type(h) && send_vk(VK_RETURN) == 2;
+        Sleep(100);
+        g_guard = false;
+        sayf(job, L"autofill: password filled (%zu characters) %llu s after the launcher started the game, on probe %d; "
+                  L"%s", typed, (unsigned long long)elapsed(), attempt,
+             entered ? L"Enter pressed, logging in" : L"Enter NOT sent (a check failed); press Log In in the game");
         return;
     }
     gave_up(L"the password field could not be confirmed");
