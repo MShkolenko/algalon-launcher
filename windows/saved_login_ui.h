@@ -27,6 +27,12 @@ static const UINT AUTO_MS = 3000;
 struct Ui {
     HWND wnd = nullptr, account = nullptr, password = nullptr, remember = nullptr;
     HFONT font = nullptr;
+    struct Ctl {
+        HWND h;
+        int x, y, w, ht;  // in 96-dpi units
+    };
+    std::vector<Ctl> ctls;
+    int dpi = 96;
     bool touched = false, done = false, played = false;
     std::vector<Login> saved;
     std::wstring account_text, password_text;
@@ -71,6 +77,49 @@ inline void stop_auto(Ui* ui) {
     }
 }
 
+// The client size in 96-dpi units.
+static const int LOGIN_W = 380, LOGIN_H = 200;
+static const DWORD LOGIN_STYLE = WS_CAPTION | WS_SYSMENU | WS_POPUP, LOGIN_EX = WS_EX_DLGMODALFRAME | WS_EX_TOPMOST;
+
+// DPI of the window's monitor (Windows 10 1607+), else of the system.
+inline int window_dpi(HWND h) {
+    using ForWindow = UINT(WINAPI*)(HWND);
+    if (auto f = reinterpret_cast<ForWindow>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetDpiForWindow")))
+        if (UINT d = f(h)) return static_cast<int>(d);
+    HDC dc = GetDC(nullptr);
+    int d = dc ? GetDeviceCaps(dc, LOGPIXELSY) : 96;
+    if (dc) ReleaseDC(nullptr, dc);
+    return d;
+}
+
+// The outer window size for the client size at this DPI.
+inline SIZE outer_size(int dpi) {
+    RECT r = {0, 0, MulDiv(LOGIN_W, dpi, 96), MulDiv(LOGIN_H, dpi, 96)};
+    using AdjForDpi = BOOL(WINAPI*)(LPRECT, DWORD, BOOL, DWORD, UINT);
+    auto f = reinterpret_cast<AdjForDpi>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "AdjustWindowRectExForDpi"));
+    if (!f || !f(&r, LOGIN_STYLE, FALSE, LOGIN_EX, static_cast<UINT>(dpi))) AdjustWindowRectEx(&r, LOGIN_STYLE, FALSE, LOGIN_EX);
+    return SIZE{r.right - r.left, r.bottom - r.top};
+}
+
+// Font and control positions for a DPI: at the start and on every WM_DPICHANGED.
+inline void apply_dpi(Ui* ui, int dpi) {
+    ui->dpi = dpi;
+    NONCLIENTMETRICSW ncm = {sizeof(ncm)};
+    using SpiForDpi = BOOL(WINAPI*)(UINT, UINT, PVOID, UINT, UINT);
+    auto f = reinterpret_cast<SpiForDpi>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "SystemParametersInfoForDpi"));
+    if (!f || !f(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0, static_cast<UINT>(dpi)))
+        SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0);
+    ncm.lfMessageFont.lfQuality = CLEARTYPE_QUALITY;
+    HFONT font = CreateFontIndirectW(&ncm.lfMessageFont);
+    for (const Ui::Ctl& c : ui->ctls) {
+        SetWindowPos(c.h, nullptr, MulDiv(c.x, dpi, 96), MulDiv(c.y, dpi, 96), MulDiv(c.w, dpi, 96),
+                     MulDiv(c.ht, dpi, 96), SWP_NOZORDER | SWP_NOACTIVATE);
+        SendMessageW(c.h, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+    }
+    if (ui->font) DeleteObject(ui->font);
+    ui->font = font;
+}
+
 inline LRESULT CALLBACK login_proc(HWND h, UINT msg, WPARAM w, LPARAM l) {
     Ui* ui = reinterpret_cast<Ui*>(GetWindowLongPtrW(h, GWLP_USERDATA));
     switch (msg) {
@@ -111,6 +160,14 @@ inline LRESULT CALLBACK login_proc(HWND h, UINT msg, WPARAM w, LPARAM l) {
         break;
     case WM_CLOSE:
         if (ui) finish(ui, false);
+        return 0;
+    case WM_DPICHANGED:  // moved to a monitor with another scale, or the RDP scale changed: re-lay out
+        if (ui) {
+            const RECT* r = reinterpret_cast<const RECT*>(l);
+            SetWindowPos(h, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+            apply_dpi(ui, HIWORD(w));
+        }
         return 0;
     case WM_CTLCOLORSTATIC:
         SetBkMode(reinterpret_cast<HDC>(w), TRANSPARENT);
@@ -166,33 +223,17 @@ inline DWORD choose(const std::wstring& prefix, const std::wstring& realm, Login
     wc.lpszClassName = L"AlgalonLoginWindow";
     RegisterClassExW(&wc);  // a second call in the same process fails harmlessly: the class is already there
 
-    // the launcher is DPI aware: lay out in 96-dpi units and scale to the screen the window opens on
-    HDC sdc = GetDC(nullptr);
-    int dpi = sdc ? GetDeviceCaps(sdc, LOGPIXELSY) : 96;
-    if (sdc) ReleaseDC(nullptr, sdc);
-    using DpiForSystem = UINT(WINAPI*)();
-    if (auto f = reinterpret_cast<DpiForSystem>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetDpiForSystem")))
-        dpi = static_cast<int>(f());
-    auto S = [dpi](int v) { return MulDiv(v, dpi, 96); };
-    NONCLIENTMETRICSW ncm = {sizeof(ncm)};
-    SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0);  // already in this DPI's pixels
-    ncm.lfMessageFont.lfQuality = CLEARTYPE_QUALITY;
-    ui.font = CreateFontIndirectW(&ncm.lfMessageFont);
-
-    const int W = S(380), H = S(200);
-    RECT r = {0, 0, W, H};
-    DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP, ex = WS_EX_DLGMODALFRAME | WS_EX_TOPMOST;
-    AdjustWindowRectEx(&r, style, FALSE, ex);
-    int ww = r.right - r.left, wh = r.bottom - r.top;
-    int sx = (GetSystemMetrics(SM_CXSCREEN) - ww) / 2, sy = (GetSystemMetrics(SM_CYSCREEN) - wh) / 2;
+    // The launcher is DPI aware (per monitor): the window is laid out in 96-dpi units and scaled to the DPI of the
+    // monitor it opens on (the primary, where it is centred), and again whenever that changes (WM_DPICHANGED).
     const std::wstring title = realm + L" - вход";
-    ui.wnd = CreateWindowExW(ex, wc.lpszClassName, title.c_str(), style, sx, sy, ww, wh, nullptr, nullptr, inst, &ui);
+    ui.wnd = CreateWindowExW(LOGIN_EX, wc.lpszClassName, title.c_str(), LOGIN_STYLE, 0, 0, 100, 100, nullptr, nullptr,
+                             inst, &ui);
     if (!ui.wnd) return GetLastError();
 
     auto make = [&](const wchar_t* cls, const wchar_t* text, DWORD st, int x, int y, int w, int h, int id) {
-        HWND c = CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | st, S(x), S(y), S(w), S(h), ui.wnd,
+        HWND c = CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | st, x, y, w, h, ui.wnd,
                                  reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), inst, nullptr);
-        SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(ui.font), TRUE);
+        ui.ctls.push_back({c, x, y, w, h});
         return c;
     };
     make(WC_STATICW, L"Логин", SS_CENTERIMAGE, 24, 24, 70, 26, 0);
@@ -205,6 +246,11 @@ inline DWORD choose(const std::wstring& prefix, const std::wstring& realm, Login
     SendMessageW(ui.remember, BM_SETCHECK, BST_CHECKED, 0);
     HWND play = make(WC_BUTTONW, L"Играть", WS_TABSTOP | BS_DEFPUSHBUTTON, 146, 148, 100, 30, ID_PLAY);
     make(WC_BUTTONW, L"Отмена", WS_TABSTOP | BS_PUSHBUTTON, 256, 148, 100, 30, ID_CANCEL);
+    int dpi = window_dpi(ui.wnd);
+    apply_dpi(&ui, dpi);
+    SIZE outer = outer_size(dpi);
+    SetWindowPos(ui.wnd, nullptr, (GetSystemMetrics(SM_CXSCREEN) - outer.cx) / 2,
+                 (GetSystemMetrics(SM_CYSCREEN) - outer.cy) / 2, outer.cx, outer.cy, SWP_NOZORDER | SWP_NOACTIVATE);
     if (found) {  // the last login used comes first (CB_ADDSTRING keeps the order: the combo is not sorted)
         SendMessageW(ui.account, CB_SETCURSEL, 0, 0);
         SetWindowTextW(ui.password, ui.saved[0].password.c_str());
