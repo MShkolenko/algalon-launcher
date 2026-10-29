@@ -356,7 +356,7 @@ static Probe probe(const Job& job, HWND h, int attempt) {
                 // nothing took the W (no login screen yet): look once more; if it shows up late, stop, else retry
                 Frame late;
                 Box bl;
-                if (!observe(h, f0, late, bl) || bl.n > 0) return Probe::unsafe;
+                if (!observe(h, f0, late, bl) || bl.n > 0 || g_foreign.load() != 0) return Probe::unsafe;
                 return Probe::unclear;
             }
             if (seen1 && can_type(h)) {
@@ -389,6 +389,7 @@ static Probe probe(const Job& job, HWND h, int attempt) {
          b1.n, b2.empty() ? 0 : b2.w(), b2.empty() ? 0 : b2.h(), b2.x0, b2.y0, b2.n, settled ? b3.n : -1L);
     if (g_foreign.load() != 0 || !erased_all) return Probe::unsafe;
     if (sent < 2 || !seen2 || !settled || b1.empty() || b2.empty()) return sent ? Probe::unsafe : Probe::unclear;
+    // (g_foreign was checked above: any outside input during the probe already returned unsafe)
     if (b3.n > b1.n / 4) return Probe::unsafe;  // the erase did not bring the field back
     int limit = f0.h / 40;  // a login field glyph is far smaller than 1/40 of the window height
     if (b1.w() > limit || b1.h() > limit || b2.w() > limit || b2.h() > limit) return Probe::unclear;
@@ -472,8 +473,8 @@ static void run(Job& job) {
                  typed, job.password.s.size());
             return;
         }
-        sayf(job, L"autofill: password filled (%zu characters) after %llu s; press Log In in the game", typed,
-             (unsigned long long)elapsed());
+        sayf(job, L"autofill: password filled (%zu characters) %llu s after the launcher started the game, on probe "
+                  L"%d; press Log In in the game", typed, (unsigned long long)elapsed(), attempt);
         return;
     }
     gave_up(L"the password field could not be confirmed");
