@@ -1074,6 +1074,13 @@ static wstr prepare_own_client(const wstr& root, const wstr& product, const wstr
 // ---- main -------------------------------------------------------------------------------------------------------
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
+    // DPI aware before any window: the login window draws sharp text at 125-150 % scaling instead of a stretched
+    // bitmap, and autofill's window rectangles and screen captures are in real pixels. Per-monitor v2 where Windows
+    // has it (10 1703+), else system-aware.
+    using SetCtx = BOOL(WINAPI*)(HANDLE);
+    auto set_ctx = reinterpret_cast<SetCtx>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetProcessDpiAwarenessContext"));
+    if (!set_ctx || !set_ctx(reinterpret_cast<HANDLE>(-4)))  // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+        SetProcessDPIAware();
     int argc = __argc;
     wchar_t** argv = __wargv;
     g_logdir = data_dir();

@@ -164,11 +164,20 @@ inline DWORD choose(const std::wstring& prefix, const std::wstring& realm, Login
     wc.lpszClassName = L"AlgalonLoginWindow";
     RegisterClassExW(&wc);  // a second call in the same process fails harmlessly: the class is already there
 
+    // the launcher is DPI aware: lay out in 96-dpi units and scale to the screen the window opens on
+    HDC sdc = GetDC(nullptr);
+    int dpi = sdc ? GetDeviceCaps(sdc, LOGPIXELSY) : 96;
+    if (sdc) ReleaseDC(nullptr, sdc);
+    using DpiForSystem = UINT(WINAPI*)();
+    if (auto f = reinterpret_cast<DpiForSystem>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetDpiForSystem")))
+        dpi = static_cast<int>(f());
+    auto S = [dpi](int v) { return MulDiv(v, dpi, 96); };
     NONCLIENTMETRICSW ncm = {sizeof(ncm)};
-    SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0);
+    SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0);  // already in this DPI's pixels
+    ncm.lfMessageFont.lfQuality = CLEARTYPE_QUALITY;
     ui.font = CreateFontIndirectW(&ncm.lfMessageFont);
 
-    const int W = 380, H = 200;
+    const int W = S(380), H = S(200);
     RECT r = {0, 0, W, H};
     DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP, ex = WS_EX_DLGMODALFRAME | WS_EX_TOPMOST;
     AdjustWindowRectEx(&r, style, FALSE, ex);
@@ -179,7 +188,7 @@ inline DWORD choose(const std::wstring& prefix, const std::wstring& realm, Login
     if (!ui.wnd) return GetLastError();
 
     auto make = [&](const wchar_t* cls, const wchar_t* text, DWORD st, int x, int y, int w, int h, int id) {
-        HWND c = CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | st, x, y, w, h, ui.wnd,
+        HWND c = CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | st, S(x), S(y), S(w), S(h), ui.wnd,
                                  reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), inst, nullptr);
         SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(ui.font), TRUE);
         return c;
