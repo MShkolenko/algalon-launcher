@@ -550,6 +550,26 @@ static void run(Job& job) {
     Sleep(1000);
     Hooks hooks;
     if (!hooks.start()) return gave_up(L"input hooks unavailable");
+    // One launcher types at a time, machine-wide: every launcher tags its keys the same way, so two typing at once
+    // would take each other's keys for their own. Held for one probe (and the typing after it), then let go.
+    HANDLE turn = CreateMutexW(nullptr, FALSE, L"Local\\AlgalonLauncherAutofill");
+    if (!turn) return gave_up(L"the typing lock is unavailable");
+    struct Turn {
+        HANDLE h;
+        bool held = false;
+        bool take() {
+            DWORD r = WaitForSingleObject(h, 60000);
+            return held = r == WAIT_OBJECT_0 || r == WAIT_ABANDONED;
+        }
+        void drop() {
+            if (held) ReleaseMutex(h);
+            held = false;
+        }
+        ~Turn() {
+            drop();
+            CloseHandle(h);
+        }
+    } my_turn{turn};
     int unclear = 0;
     for (int attempt = 1; elapsed() < 240; ++attempt) {
         if (text_in(job.conn_log, "Glue login started")) return gave_up(L"a login was started by hand");
@@ -559,6 +579,7 @@ static void run(Job& job) {
             --attempt;
             continue;
         }
+        if (!my_turn.take()) return gave_up(L"another launcher kept typing for a minute");
         g_foreign = 0;
         g_guard = true;
         Probe p = probe(job, h, attempt);
@@ -570,6 +591,7 @@ static void run(Job& job) {
         }
         if (p != Probe::masked) {
             g_guard = false;
+            my_turn.drop();
             if (++unclear > 150) break;
             if (job.debug_dir.empty() && attempt > 3) {
                 Sleep(700);  // quiet: the log only names the first attempts unless debugging

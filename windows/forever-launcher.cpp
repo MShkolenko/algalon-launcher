@@ -1106,9 +1106,18 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         return SETUP_OK;
     }
 
-    HANDLE single = CreateMutexW(nullptr, TRUE, L"Local\\" REALM_MUTEX_ID L"Launcher");
-    if (single && GetLastError() == ERROR_ALREADY_EXISTS) {
-        MessageBoxW(nullptr, L"The " REALM_NAME L" launcher is already running.", REALM_NAME L" launcher", MB_OK | MB_ICONINFORMATION);
+    // Several launchers may run at once, one per game client (operator, 2026-10-29: «может я захочу 2-3-10 акков
+    // запустить»). `alive` is held by every launcher for its whole life and only tells whether others run; `single`
+    // is the preparation lock: update, own copy, hosts, settings file and the client start happen under it, one
+    // launcher at a time, and it is released as soon as the client has started.
+    HANDLE alive = CreateMutexW(nullptr, FALSE, L"Local\\" REALM_MUTEX_ID L"LauncherAlive");
+    bool others = alive && GetLastError() == ERROR_ALREADY_EXISTS;
+    HANDLE single = CreateMutexW(nullptr, FALSE, L"Local\\" REALM_MUTEX_ID L"Launcher");
+    if (!single) return fail(L"cannot create the launcher's lock", GetLastError());
+    DWORD lock = WaitForSingleObject(single, 5 * 60 * 1000);  // abandoned: its owner died, the lock is ours now
+    if (lock != WAIT_OBJECT_0 && lock != WAIT_ABANDONED) {
+        MessageBoxW(nullptr, L"Another " REALM_NAME L" launcher is still preparing the game. Try again in a minute.",
+                    REALM_NAME L" launcher", MB_OK | MB_ICONINFORMATION);
         return 0;
     }
 
@@ -1146,7 +1155,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     wstr ini_path = g_logdir + L"\\launcher.ini";
     Ini ini = read_ini(ini_path);
     if (!updated_from) {
-        if (exists(self + L".old")) {
+        if (others) {  // the running ones started from this file: replacing it under them is not worth it
+            say(L"update: other launchers are running, the update check waits for a start without them");
+        } else if (exists(self + L".old")) {
             say(L"update: %s.old is left from an interrupted update; it may be the only good copy, so it is kept and no "
                 L"update is tried until it is removed or renamed back", self.c_str());
         } else if (!ini.count(L"update") || ini[L"update"] != L"0") {
@@ -1217,10 +1228,20 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             return fail((L"The World of Warcraft folder " + client + L" is reached through a link, SUBST drive, short or network "
                          L"name (it resolves to " + (canon.empty() ? wstr(L"?") : canon) + L"). The launcher's own game copy needs "
                          L"the real folder: choose it again, or set own_client=0 in launcher.ini to use the shared cache.").c_str());
-        if (client_running())
-            return fail(L"World of Warcraft is already running. Close the game (also the official one) and start the launcher again.");
-        archive_official_wdb(product);
-        wstr why, own_product = prepare_own_client(client, product, base_name(exe), why);
+        wstr why, own_product;
+        if (client_running()) {
+            // another client runs (ours or the official one): nothing is copied, archived or rebuilt under it; an
+            // existing own copy is started as it is, a refresh waits for a start with no game running
+            wstr own = product + OWN_SUFFIX;
+            if (!exists(own + L"\\" + base_name(exe)))
+                return fail(L"World of Warcraft is already running and the launcher's own copy of the game does not exist yet. "
+                            L"Close the game (also the official one) and start the launcher again.");
+            say(L"own client: a game is already running, the copy is used as it is (no refresh now)");
+            own_product = own;
+        } else {
+            archive_official_wdb(product);
+            own_product = prepare_own_client(client, product, base_name(exe), why);
+        }
         if (own_product.empty())
             return fail((L"Cannot prepare the launcher's own copy of the game: " + why +
                          L"\n\nThe official game folder was not changed.").c_str());
@@ -1323,13 +1344,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
 
     // 5. start the client with our settings file. The previous Connection.log goes first (it is in our own copy and no
     // client runs now): the guard below reads the new log from its start and must not see an old session's host.
-    if (!DeleteFileW((product + L"\\Logs\\Connection.log").c_str())) {
+    if (!DeleteFileW((product + L"\\Logs\\Connection.log").c_str())) {  // another running client may hold it
         DWORD e = GetLastError();
-        if (e != ERROR_FILE_NOT_FOUND && e != ERROR_PATH_NOT_FOUND && fill) {
-            say(L"saved login: the previous Connection.log could not be removed (error %lu); password autofill is off "
-                L"for this start", e);
-            fill = false;
-        }
+        if (e != ERROR_FILE_NOT_FOUND && e != ERROR_PATH_NOT_FOUND)
+            say(L"settings: the previous Connection.log could not be removed (error %lu)", e);
     }
     STARTUPINFOW si = {sizeof(si)};
     PROCESS_INFORMATION pi = {};
@@ -1340,6 +1358,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         return fail(L"cannot start the client", GetLastError());
     CloseHandle(pi.hThread);
     say(L"client started, pid %lu; the launcher keeps the server key in place until the game closes", pi.dwProcessId);
+    ReleaseMutex(single);  // preparation is over: the next launcher may start its own client now
+    CloseHandle(single);
+    single = nullptr;
     if (fill) {  // own thread: the key patch loop below starts at once and never waits for it
         autofill::Job job;
         job.pid = pi.dwProcessId;
@@ -1397,5 +1418,6 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     if (patch_failed && !patched)
         return fail(L"The game found its key store but the launcher could not set the " REALM_NAME L" server key in it, so the "
                     L"login to " REALM_NAME L" could not succeed. Run the launcher again; if it repeats, send launcher.log.");
+    say(L"launcher exits");
     return 0;
 }
