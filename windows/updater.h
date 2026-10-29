@@ -9,7 +9,7 @@
 #pragma comment(lib, "bcrypt.lib")
 
 #ifndef LAUNCHER_VERSION
-#define LAUNCHER_VERSION L"1.1.0"
+#define LAUNCHER_VERSION L"1.2.0"
 #endif
 
 namespace upd {
@@ -483,8 +483,10 @@ static HANDLE new_event(const wstr& name) {  // a fresh, non-signalled, manual-r
 
 enum Result { NO_UPDATE, HANDED_OVER, ROLLED_BACK, OTHER_RUNNING, STUCK };
 
-// Steps 1-5 of "Installing an update" on Windows. `single` is the single-instance mutex: released just before the new
-// launcher starts, taken back before any file is touched in a rollback. `extra` are arguments passed to the new one.
+// Steps 1-5 of "Installing an update" on Windows. `single` is the preparation lock, held by the caller throughout:
+// the new launcher confirms its start without it and takes it only after this one has handed over and exited, so a
+// rollback happens still holding it and no other launcher can start in between. `extra` are arguments passed to the
+// new one.
 // HANDED_OVER / OTHER_RUNNING: the caller exits quietly. STUCK: the caller shows `stuck_msg` and stops; the files are
 // then exactly as the log says, and the previous launcher is never deleted.
 static Result install(const wstr& self, const std::string& bytes, const std::string& version, HANDLE& single,
@@ -537,11 +539,6 @@ static Result install(const wstr& self, const std::string& bytes, const std::str
         DeleteFileW(fresh.c_str());
         return NO_UPDATE;
     }
-    if (single) {  // the new launcher must be able to take the single-instance lock
-        ReleaseMutex(single);
-        CloseHandle(single);
-        single = nullptr;
-    }
     wstr cmd = quote(self) + L" --updated-from " + std::to_wstring(GetCurrentProcessId()) + L" --update-token " + token + extra;
     STARTUPINFOW si = {sizeof(si)};
     PROCESS_INFORMATION pi = {};
@@ -588,19 +585,8 @@ static Result install(const wstr& self, const std::string& bytes, const std::str
         say(L"update: cannot start the new launcher (error %lu); rolling back", GetLastError());
     }
     close_events();
-    // the new process is gone: take the lock back BEFORE touching a file
-    single = CreateMutexW(nullptr, TRUE, L"Local\\" REALM_MUTEX_ID L"Launcher");
-    DWORD me = GetLastError();
-    if (!single)
-        return stuck(L"The lock could not be taken back (error " + std::to_wstring(me) + L"): the new build is " + self +
-                     L", the previous one is " + old + L".");
-    if (me == ERROR_ALREADY_EXISTS) {
-        CloseHandle(single);
-        single = nullptr;
-        say(L"update: another launcher started meanwhile; files left as they are (new build %s, previous %s); this one stops",
-            self.c_str(), old.c_str());
-        return OTHER_RUNNING;
-    }
+    // the new process is gone; the preparation lock was never let go, so no other launcher touched these files
+    (void)single;
     if (!DeleteFileW(bad.c_str()) && GetLastError() != ERROR_FILE_NOT_FOUND)
         say(L"update: could not delete the earlier %s (error %lu)", bad.c_str(), GetLastError());
     if (!MoveFileExW(self.c_str(), bad.c_str(), MOVEFILE_WRITE_THROUGH)) {
