@@ -1251,6 +1251,12 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     // autofill.h only after it proves the masked password field has the focus. Cancel means manual login.
     const wstr cred_target = L"" REALM_LONG_NAME L"/" + ini[L"portal"];
     saved_login::Login login;
+    struct WipeLogin {  // every return of wWinMain from here on wipes the password
+        std::wstring& p;
+        ~WipeLogin() {
+            if (!p.empty()) SecureZeroMemory(&p[0], p.size() * sizeof(wchar_t));
+        }
+    } wipe_login{login.password};
     bool fill = false;
     if (!ini.count(L"saved_login") || ini[L"saved_login"] != L"0") {
         DWORD lc = saved_login::choose(cred_target, REALM_NAME, login, fill);
@@ -1306,7 +1312,14 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
 
     // 5. start the client with our settings file. The previous Connection.log goes first (it is in our own copy and no
     // client runs now): the guard below reads the new log from its start and must not see an old session's host.
-    DeleteFileW((product + L"\\Logs\\Connection.log").c_str());
+    if (!DeleteFileW((product + L"\\Logs\\Connection.log").c_str())) {
+        DWORD e = GetLastError();
+        if (e != ERROR_FILE_NOT_FOUND && e != ERROR_PATH_NOT_FOUND && fill) {
+            say(L"saved login: the previous Connection.log could not be removed (error %lu); password autofill is off "
+                L"for this start", e);
+            fill = false;
+        }
+    }
     STARTUPINFOW si = {sizeof(si)};
     PROCESS_INFORMATION pi = {};
     wstr cmdline = L"\"" + exe + L"\" -config " + ini[L"config"];
@@ -1319,7 +1332,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     if (fill) {  // own thread: the key patch loop below starts at once and never waits for it
         autofill::Job job;
         job.pid = pi.dwProcessId;
-        job.password = login.password;
+        job.password.s = login.password;
         job.conn_log = product + L"\\Logs\\Connection.log";
         if (ini.count(L"autofill_debug") && ini[L"autofill_debug"] == L"1") job.debug_dir = g_logdir;
         job.log = [](const wchar_t* t) { say(L"%s", t); };

@@ -34,9 +34,23 @@ namespace autofill {
 
 using Log = void (*)(const wchar_t* text);
 
+// A password that is wiped whenever its holder goes away, on every path (a move wipes the source).
+struct SecretString {
+    std::wstring s;
+    SecretString() = default;
+    SecretString(const SecretString&) = delete;
+    SecretString& operator=(const SecretString&) = delete;
+    SecretString(SecretString&& o) noexcept : s(std::move(o.s)) { o.wipe(); }
+    void wipe() {
+        if (!s.empty()) SecureZeroMemory(&s[0], s.size() * sizeof(wchar_t));
+        s.clear();
+    }
+    ~SecretString() { wipe(); }
+};
+
 struct Job {
     DWORD pid = 0;
-    std::wstring password;      // wiped by the thread when it ends
+    SecretString password;
     std::wstring conn_log;      // the client's Logs\Connection.log
     std::wstring debug_dir;     // non-empty: save probe frames there (calibration; never a frame with the password)
     Log log = nullptr;
@@ -85,6 +99,7 @@ public:
                 while (GetMessageW(&msg, nullptr, 0, 0) > 0) DispatchMessageW(&msg);
             if (kb) UnhookWindowsHookEx(kb);
             if (ms) UnhookWindowsHookEx(ms);
+            st->exited = true;
         });
         for (int i = 0; i < 500 && !state_->ready.load(); ++i) Sleep(10);  // the thread owns no local of ours
         return state_->ready.load() && state_->ok.load();
@@ -94,13 +109,13 @@ public:
         if (!thread_.joinable()) return;
         while (!state_->ready.load()) Sleep(10);  // it signals ready on every path; then the quit can be delivered
         if (state_->ok.load())
-            while (!PostThreadMessageW(state_->tid.load(), WM_QUIT, 0, 0)) Sleep(10);
+            while (!state_->exited.load() && !PostThreadMessageW(state_->tid.load(), WM_QUIT, 0, 0)) Sleep(10);
         thread_.join();
     }
 
 private:
     struct State {
-        std::atomic<bool> ready{false}, ok{false};
+        std::atomic<bool> ready{false}, ok{false}, exited{false};
         std::atomic<DWORD> tid{0};
     };
     std::shared_ptr<State> state_ = std::make_shared<State>();
@@ -166,6 +181,7 @@ static bool grab(HWND h, Frame& f) {
     if (!GetClientRect(h, &r) || !ClientToScreen(h, &o)) return false;
     f.w = r.right; f.h = r.bottom;
     if (f.w < 640 || f.h < 480) return false;
+    f.px.assign(static_cast<size_t>(f.w) * f.h * 4, 0);  // before any GDI handle: a throw here leaks nothing
     bool ok = false;
     HDC screen = GetDC(nullptr);
     if (!screen) return false;
@@ -182,7 +198,6 @@ static bool grab(HWND h, Frame& f) {
             bi.bmiHeader.biHeight = -f.h;
             bi.bmiHeader.biPlanes = 1;
             bi.bmiHeader.biBitCount = 32;
-            f.px.assign(static_cast<size_t>(f.w) * f.h * 4, 0);
             ok = GetDIBits(mem, bmp, 0, f.h, f.px.data(), &bi, DIB_RGB_COLORS) == f.h;
         }
         DeleteObject(bmp);
@@ -260,7 +275,8 @@ static void save_bmp(const std::wstring& path, const Frame& f) {
 
 // ---- keys --------------------------------------------------------------------------------------------------------
 
-static bool send_char(wchar_t c) {
+// How many of the 2 events (down, up) went out: 0 none, 1 half a key (its effect unknown), 2 a whole key.
+static UINT send_char(wchar_t c) {
     INPUT in[2] = {};
     for (int k = 0; k < 2; ++k) {
         in[k].type = INPUT_KEYBOARD;
@@ -268,10 +284,10 @@ static bool send_char(wchar_t c) {
         in[k].ki.dwFlags = KEYEVENTF_UNICODE | (k ? KEYEVENTF_KEYUP : 0);
         in[k].ki.dwExtraInfo = AUTOFILL_TAG;
     }
-    return SendInput(2, in, sizeof(INPUT)) == 2;
+    return SendInput(2, in, sizeof(INPUT));
 }
 
-static bool send_vk(WORD vk) {
+static UINT send_vk(WORD vk) {
     INPUT in[2] = {};
     for (int k = 0; k < 2; ++k) {
         in[k].type = INPUT_KEYBOARD;
@@ -279,7 +295,7 @@ static bool send_vk(WORD vk) {
         in[k].ki.dwFlags = k ? KEYEVENTF_KEYUP : 0;
         in[k].ki.dwExtraInfo = AUTOFILL_TAG;
     }
-    return SendInput(2, in, sizeof(INPUT)) == 2;
+    return SendInput(2, in, sizeof(INPUT));
 }
 
 static bool text_in(const std::wstring& path, const char* needle) {
@@ -329,19 +345,28 @@ static Probe probe(const Job& job, HWND h, int attempt) {
     Box b1, b2, b3;
     if (!grab(h, f0)) return Probe::unclear;
     int sent = 0;
-    bool seen1 = false, seen2 = false;
-    if (can_type(h) && send_char(L'W')) {
-        ++sent;
-        seen1 = observe(h, f0, f1, b1);
-        if (seen1 && can_type(h) && send_char(L'i')) {
+    bool seen1 = false, seen2 = false, half = false;
+    if (can_type(h)) {
+        UINT n = send_char(L'W');
+        half = n == 1;
+        if (n == 2) {
             ++sent;
-            seen2 = observe(h, f1, f2, b2);
+            seen1 = observe(h, f0, f1, b1);
+            if (seen1 && can_type(h)) {
+                n = send_char(L'i');
+                half = n == 1;
+                if (n == 2) {
+                    ++sent;
+                    seen2 = observe(h, f1, f2, b2);
+                }
+            }
         }
     }
+    if (half) return Probe::unsafe;  // half a key went out: its effect is unknown, nothing more is sent
     // erase exactly what was sent, then check the screen came back to the frame before the probe
     bool erased_all = true;
     for (int k = 0; k < sent; ++k) {
-        if (!can_type(h) || !send_vk(VK_BACK)) { erased_all = false; break; }
+        if (!can_type(h) || send_vk(VK_BACK) != 2) { erased_all = false; break; }
         Sleep(120);
     }
     bool settled = erased_all && observe(h, f0, g, b3) && b3.n >= 0;
@@ -375,16 +400,11 @@ static Probe probe(const Job& job, HWND h, int attempt) {
 
 // ---- the thread --------------------------------------------------------------------------------------------------
 
-struct Secret {  // wipes the password on every way out of run()
-    std::wstring& s;
-    ~Secret() {
-        if (!s.empty()) SecureZeroMemory(&s[0], s.size() * sizeof(wchar_t));
-        s.clear();
-    }
-};
-
 static void run(Job& job) {
-    Secret secret{job.password};
+    struct Wipe {
+        SecretString& p;
+        ~Wipe() { p.wipe(); }
+    } wipe{job.password};
     ULONGLONG t0 = GetTickCount64();
     auto elapsed = [&] { return (GetTickCount64() - t0) / 1000; };
     auto gave_up = [&](const wchar_t* why) { sayf(job, L"autofill: not filled (%s); type the password in the game", why); };
@@ -426,18 +446,18 @@ static void run(Job& job) {
         if (text_in(job.conn_log, "Glue login started")) return gave_up(L"a login was started by hand");
         // masked field confirmed: type the password; every check holds before every character
         size_t typed = 0;
-        for (wchar_t c : job.password) {
-            if (!can_type(h) || !send_char(c)) break;
+        for (wchar_t c : job.password.s) {
+            if (!can_type(h) || send_char(c) != 2) break;
             ++typed;
             Sleep(25);
         }
         Sleep(200);
         g_guard = false;
-        if (typed != job.password.size()) {
+        if (typed != job.password.s.size()) {
             // no blind cleanup: where the focus is now is not known
             sayf(job, L"autofill: stopped after %zu of %zu characters (the game lost the front, the desktop changed, "
                       L"a key was held or other input came); clear the password field and type it yourself",
-                 typed, job.password.size());
+                 typed, job.password.s.size());
             return;
         }
         sayf(job, L"autofill: password filled (%zu characters) after %llu s; press Log In in the game", typed,
@@ -456,14 +476,13 @@ inline void start(Job job) {
             try {
                 run(*owned);
             } catch (...) {
-                if (!owned->password.empty())
-                    SecureZeroMemory(&owned->password[0], owned->password.size() * sizeof(wchar_t));
+                owned->password.wipe();
                 if (owned->log) owned->log(L"autofill: internal error; type the password in the game");
             }
             g_guard = false;
         }).detach();
-    } catch (...) {
-        if (!job.password.empty()) SecureZeroMemory(&job.password[0], job.password.size() * sizeof(wchar_t));
+    } catch (...) {  // `owned` wipes the password as it goes away; `job` was wiped by the move or is wiped here
+        job.password.wipe();
         if (job.log) job.log(L"autofill: could not start; type the password in the game");
     }
 }
