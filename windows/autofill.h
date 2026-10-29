@@ -624,7 +624,7 @@ static void run(Job& job) {
         UINT enter = can_type(h) ? send_vk(VK_RETURN) : 0;
         Sleep(100);
         g_guard = false;
-        sayf(job, L"autofill: password filled (%zu characters) %llu s after the launcher started the game, on probe %d; "
+        sayf(job, L"autofill: password filled (%zu characters) %llu s after autofill began watching for the login screen, on probe %d; "
                   L"%s", typed, (unsigned long long)elapsed(), attempt,
              enter == 2 ? L"Enter pressed, logging in"
              : enter == 1 ? L"only half of Enter went out (key down): the login may or may not have been sent, look at the game"
