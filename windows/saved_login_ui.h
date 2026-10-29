@@ -143,7 +143,7 @@ inline DWORD choose(const std::wstring& target, const std::wstring& realm, Login
         UINT m = msg.message;
         bool input = m == WM_KEYDOWN || m == WM_SYSKEYDOWN || m == WM_LBUTTONDOWN || m == WM_RBUTTONDOWN ||
                      m == WM_MBUTTONDOWN || m == WM_XBUTTONDOWN || m == WM_NCLBUTTONDOWN || m == WM_NCRBUTTONDOWN ||
-                     m == WM_NCMBUTTONDOWN || m == WM_NCXBUTTONDOWN || m == WM_MOUSEWHEEL;
+                     m == WM_NCMBUTTONDOWN || m == WM_NCXBUTTONDOWN || m == WM_MOUSEWHEEL || m == WM_MOUSEHWHEEL;
         if (input && (msg.hwnd == ui.wnd || IsChild(ui.wnd, msg.hwnd))) {
             if (!ui.touched) {
                 ui.touched = true;

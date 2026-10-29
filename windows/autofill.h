@@ -596,14 +596,17 @@ static void run(Job& job) {
                  typed, job.password.s.size());
             return;
         }
-        // full auto-login (operator, 2026-10-29): Enter in the confirmed password field submits the login form; the
-        // input guard is still on, so nothing outside could have moved the focus since the last character
-        bool entered = can_type(h) && send_vk(VK_RETURN) == 2;
+        // full auto-login (operator, 2026-10-29): Enter in the confirmed password field submits the login form. The
+        // input guard is still on and every check is repeated, but the client's own focus is not visible from here
+        // (the accepted limit of the screen method).
+        UINT enter = can_type(h) ? send_vk(VK_RETURN) : 0;
         Sleep(100);
         g_guard = false;
         sayf(job, L"autofill: password filled (%zu characters) %llu s after the launcher started the game, on probe %d; "
                   L"%s", typed, (unsigned long long)elapsed(), attempt,
-             entered ? L"Enter pressed, logging in" : L"Enter NOT sent (a check failed); press Log In in the game");
+             enter == 2 ? L"Enter pressed, logging in"
+             : enter == 1 ? L"only half of Enter went out (key down): the login may or may not have been sent, look at the game"
+                          : L"Enter NOT sent (a check failed); press Log In in the game");
         return;
     }
     gave_up(L"the password field could not be confirmed");
