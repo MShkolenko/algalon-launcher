@@ -3,7 +3,9 @@
 #include <wincred.h>
 #include <cstring>
 #include <string>
+#include <algorithm>
 #include <utility>
+#include <vector>
 
 namespace saved_login {
 struct Login {
@@ -60,6 +62,47 @@ inline DWORD write(const std::wstring& target, const Login& login) {
     // Despite its name this persists only for the current Windows user on this PC.
     credential.Persist = CRED_PERSIST_LOCAL_MACHINE;
     return CredWriteW(&credential, 0) ? ERROR_SUCCESS : GetLastError();
+}
+
+// Several saved logins per realm: one generic credential per account, target "<prefix>/acct/<account>".
+inline std::wstring account_target(const std::wstring& prefix, const std::wstring& account) {
+    return prefix + L"/acct/" + account;
+}
+
+// Every saved login under `prefix`, the most recently written first. Malformed entries are skipped.
+inline DWORD list(const std::wstring& prefix, std::vector<Login>& out) {
+    out.clear();
+    DWORD count = 0;
+    PCREDENTIALW* creds = nullptr;
+    const std::wstring filter = prefix + L"/acct/*";
+    if (!CredEnumerateW(filter.c_str(), 0, &count, &creds)) {
+        DWORD code = GetLastError();
+        return code == ERROR_NOT_FOUND ? ERROR_SUCCESS : code;
+    }
+    std::vector<std::pair<ULONGLONG, Login>> found;
+    for (DWORD i = 0; i < count; ++i) {
+        PCREDENTIALW c = creds[i];
+        if (c->Type != CRED_TYPE_GENERIC || !c->UserName || !c->CredentialBlob ||
+            c->CredentialBlobSize % sizeof(wchar_t) != 0 || c->CredentialBlobSize > 256)
+            continue;
+        Login l;
+        l.account = c->UserName;
+        l.password.assign(reinterpret_cast<const wchar_t*>(c->CredentialBlob), c->CredentialBlobSize / sizeof(wchar_t));
+        if (!valid(l) || account_target(prefix, l.account) != c->TargetName) {
+            if (!l.password.empty()) SecureZeroMemory(&l.password[0], l.password.size() * sizeof(wchar_t));
+            continue;
+        }
+        ULARGE_INTEGER t;
+        t.LowPart = c->LastWritten.dwLowDateTime;
+        t.HighPart = c->LastWritten.dwHighDateTime;
+        found.emplace_back(t.QuadPart, std::move(l));
+    }
+    for (DWORD i = 0; i < count; ++i)
+        if (creds[i]->CredentialBlob) SecureZeroMemory(creds[i]->CredentialBlob, creds[i]->CredentialBlobSize);
+    CredFree(creds);
+    std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+    for (auto& f : found) out.push_back(std::move(f.second));
+    return ERROR_SUCCESS;
 }
 
 inline DWORD forget(const std::wstring& target) {
