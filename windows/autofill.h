@@ -20,6 +20,8 @@
 // stops.
 #pragma once
 #include <windows.h>
+#pragma comment(lib, "user32.lib")
+#pragma comment(lib, "gdi32.lib")
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
