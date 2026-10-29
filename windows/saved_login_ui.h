@@ -140,7 +140,11 @@ inline DWORD choose(const std::wstring& target, const std::wstring& realm, Login
     MSG msg;
     while (!ui.done && GetMessageW(&msg, nullptr, 0, 0) > 0) {
         // any key or click in the window means the player is changing something: no automatic start
-        if (msg.message == WM_KEYDOWN || msg.message == WM_LBUTTONDOWN || msg.message == WM_RBUTTONDOWN) {
+        UINT m = msg.message;
+        bool input = m == WM_KEYDOWN || m == WM_SYSKEYDOWN || m == WM_LBUTTONDOWN || m == WM_RBUTTONDOWN ||
+                     m == WM_MBUTTONDOWN || m == WM_XBUTTONDOWN || m == WM_NCLBUTTONDOWN || m == WM_NCRBUTTONDOWN ||
+                     m == WM_NCMBUTTONDOWN || m == WM_NCXBUTTONDOWN || m == WM_MOUSEWHEEL;
+        if (input && (msg.hwnd == ui.wnd || IsChild(ui.wnd, msg.hwnd))) {
             if (!ui.touched) {
                 ui.touched = true;
                 KillTimer(ui.wnd, ID_TIMER);
