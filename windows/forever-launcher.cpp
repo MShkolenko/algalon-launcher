@@ -1359,9 +1359,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         return fail(L"cannot start the client", GetLastError());
     CloseHandle(pi.hThread);
     say(L"client started, pid %lu; the launcher keeps the server key in place until the game closes", pi.dwProcessId);
-    // the client reads its settings file at start: keep the lock until it has a window (at most 60 s), so the next
-    // launcher cannot rewrite accountName before this client has read its own
-    for (int i = 0; i < 120 && !autofill::game_window(pi.dwProcessId); ++i)
+    // the client reads its settings file at start: keep the lock until it has a window, or until it is gone, so the
+    // next launcher cannot rewrite accountName before this client has read its own (no time limit: a launcher that
+    // waits gives up by itself after 5 minutes with a message)
+    while (!autofill::game_window(pi.dwProcessId))
         if (WaitForSingleObject(pi.hProcess, 500) != WAIT_TIMEOUT) break;
     ReleaseMutex(single);  // preparation is over: the next launcher may start its own client now
     CloseHandle(single);
