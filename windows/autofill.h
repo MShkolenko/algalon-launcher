@@ -214,41 +214,77 @@ static int dist(const Frame& a, const Frame& b, size_t i) {
 struct Box {
     int x0 = 1 << 30, y0 = 1 << 30, x1 = -1, y1 = -1;
     long n = 0;
-    bool empty() const { return n == 0; }
     int w() const { return x1 - x0 + 1; }
     int h() const { return y1 - y0 + 1; }
 };
 
-// Pixels that differ from `before` in both later captures and are equal between them: what input drew and left.
-// n == -1: the frames cannot be compared.
-static Box settled_change(const Frame& before, const Frame& a, const Frame& b) {
-    Box box;
-    if (before.w != a.w || a.w != b.w || before.h != a.h || a.h != b.h) { box.n = -1; return box; }
-    for (int y = 0; y < a.h; ++y)
-        for (int x = 0; x < a.w; ++x) {
-            size_t i = (static_cast<size_t>(y) * a.w + x) * 4;
-            if (dist(before, a, i) > 60 && dist(before, b, i) > 60 && dist(a, b, i) < 12) {
-                ++box.n;
-                if (x < box.x0) box.x0 = x;
-                if (x > box.x1) box.x1 = x;
-                if (y < box.y0) box.y0 = y;
-                if (y > box.y1) box.y1 = y;
-            }
-        }
-    return box;
+// Changed pixels between two frames of the same size (empty when the sizes differ).
+static std::vector<unsigned char> changed(const Frame& a, const Frame& b) {
+    std::vector<unsigned char> m;
+    if (a.w != b.w || a.h != b.h) return m;
+    m.assign(static_cast<size_t>(a.w) * a.h, 0);
+    for (size_t p = 0; p < m.size(); ++p) m[p] = dist(a, b, p * 4) > 60;
+    return m;
 }
 
-// Mean colour distance between the box `p` in `fp` and the box `q` in `fq`, aligned at their top-left corners;
-// the boxes must be the same size. Small for two copies of one glyph, large for a W against an i.
-static int patch_distance(const Frame& fp, const Box& p, const Frame& fq, const Box& q) {
-    long long sum = 0;
-    for (int y = 0; y < p.h(); ++y)
-        for (int x = 0; x < p.w(); ++x) {
-            size_t i = (static_cast<size_t>(p.y0 + y) * fp.w + p.x0 + x) * 4;
-            size_t j = (static_cast<size_t>(q.y0 + y) * fq.w + q.x0 + x) * 4;
-            for (int c = 0; c < 3; ++c) sum += abs(fp.px[i + c] - fq.px[j + c]);
+// Small 8-connected blobs of changed pixels: candidate glyphs (with the caret beside them). Big areas and specks
+// (the animated background, embers) are dropped.
+static std::vector<Box> blobs(const std::vector<unsigned char>& m, int w, int h) {
+    std::vector<Box> out;
+    if (m.empty()) return out;
+    std::vector<unsigned char> seen(m.size(), 0);
+    std::vector<int> stack;
+    int maxsz = h / 30;
+    for (int start = 0; start < w * h; ++start) {
+        if (!m[start] || seen[start]) continue;
+        Box b;
+        stack.assign(1, start);
+        seen[start] = 1;
+        while (!stack.empty()) {
+            int p = stack.back();
+            stack.pop_back();
+            int x = p % w, y = p / w;
+            ++b.n;
+            if (x < b.x0) b.x0 = x;
+            if (x > b.x1) b.x1 = x;
+            if (y < b.y0) b.y0 = y;
+            if (y > b.y1) b.y1 = y;
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx) {
+                    int nx = x + dx, ny = y + dy;
+                    if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+                    int q = ny * w + nx;
+                    if (m[q] && !seen[q]) {
+                        seen[q] = 1;
+                        stack.push_back(q);
+                    }
+                }
         }
-    return static_cast<int>(sum / (static_cast<long long>(p.w()) * p.h()));
+        if (b.n >= 6 && b.w() >= 2 && b.h() >= 2 && b.w() <= maxsz && b.h() <= maxsz) out.push_back(b);
+    }
+    return out;
+}
+
+// Caret positions in a band of rows: centres of runs of columns whose changed pixels cover 85% of the band height
+// (the caret is a full-height bar; glyphs are not).
+static std::vector<int> caret_runs(const std::vector<unsigned char>& m, int w, int y0, int y1, int x0, int x1) {
+    std::vector<int> runs;
+    if (m.empty()) return runs;
+    x0 = x0 < 0 ? 0 : x0;
+    x1 = x1 >= w ? w - 1 : x1;
+    int need = (y1 - y0 + 1) * 85 / 100, start = -1;
+    for (int x = x0; x <= x1 + 1; ++x) {
+        int n = 0;
+        if (x <= x1)
+            for (int y = y0; y <= y1; ++y) n += m[static_cast<size_t>(y) * w + x];
+        bool tall = x <= x1 && n >= need;
+        if (tall && start < 0) start = x;
+        if (!tall && start >= 0) {
+            runs.push_back((start + x - 1) / 2);
+            start = -1;
+        }
+    }
+    return runs;
 }
 
 static bool box_is_game(HWND h, const Box& b) {
@@ -328,21 +364,18 @@ static void sayf(const Job& job, const wchar_t* fmt, ...) {
     job.log(buf);
 }
 
-// Wait, capture twice, the settled change against `before`.
-static bool observe(HWND h, const Frame& before, Frame& after, Box& box) {
-    Sleep(150);  // a frame or two at any playable frame rate
-    Frame a;
-    if (!grab(h, a)) return false;
-    Sleep(100);
-    if (!grab(h, after)) return false;
-    box = settled_change(before, a, after);
-    return box.n >= 0;
+// After a key: give the game a frame or two, then capture.
+static bool observe(HWND h, Frame& after) {
+    Sleep(180);
+    return grab(h, after);
 }
 
+// The caret is the ruler. Typing W then i into an empty field moves the caret by the width of each glyph: in a masked
+// field both are the same '*', in a clear field W is far wider than i. Calibrated live on 70658 (2026-10-29, 1920x1200
+// RDP window): caret at 1219, after W 1231, after i 1243, back at 1219 after two Backspaces; one glyph blob per key.
 // unsafe: something that was sent may sit where it was not meant to be; autofill must stop, not retry.
 static Probe probe(const Job& job, HWND h, int attempt) {
     Frame f0, f1, f2, g;
-    Box b1, b2, b3;
     if (!grab(h, f0)) return Probe::unclear;
     int sent = 0;
     bool seen1 = false, seen2 = false, half = false;
@@ -351,59 +384,87 @@ static Probe probe(const Job& job, HWND h, int attempt) {
         half = n == 1;
         if (n == 2) {
             ++sent;
-            seen1 = observe(h, f0, f1, b1);
-            if (seen1 && b1.empty()) {
-                // nothing took the W (no login screen yet): look once more; if it shows up late, stop, else retry
-                Frame late;
-                Box bl;
-                if (!observe(h, f0, late, bl) || bl.n > 0 || g_foreign.load() != 0) return Probe::unsafe;
-                return Probe::unclear;
-            }
+            seen1 = observe(h, f1);
             if (seen1 && can_type(h)) {
                 n = send_char(L'i');
                 half = n == 1;
                 if (n == 2) {
                     ++sent;
-                    seen2 = observe(h, f1, f2, b2);
+                    seen2 = observe(h, f2);
                 }
             }
         }
     }
     if (half) return Probe::unsafe;  // half a key went out: its effect is unknown, nothing more is sent
-    // erase exactly what was sent, then check the screen came back to the frame before the probe
+    // erase exactly what was sent (if a field took the keys, they are in it; if none did, the Backspaces go nowhere)
     bool erased_all = true;
     for (int k = 0; k < sent; ++k) {
-        if (!can_type(h) || send_vk(VK_BACK) != 2) { erased_all = false; break; }
+        if (!can_type(h) || send_vk(VK_BACK) != 2) {
+            erased_all = false;
+            break;
+        }
         Sleep(60);
     }
-    bool settled = erased_all && observe(h, f0, g, b3) && b3.n >= 0;
-    if (!job.debug_dir.empty()) {
+    bool seen3 = erased_all && observe(h, g);
+    if (!job.debug_dir.empty() && seen2) {
         std::wstring p = job.debug_dir + L"\\probe" + std::to_wstring(attempt) + L"_";
         save_bmp(p + L"0.bmp", f0);
-        if (seen1) save_bmp(p + L"1.bmp", f1);
-        if (seen2) save_bmp(p + L"2.bmp", f2);
-        if (settled) save_bmp(p + L"3.bmp", g);
+        save_bmp(p + L"1.bmp", f1);
+        save_bmp(p + L"2.bmp", f2);
+        if (seen3) save_bmp(p + L"3.bmp", g);
     }
-    sayf(job, L"autofill: probe %d: sent %d; W box %dx%d at %d,%d (%ld px); i box %dx%d at %d,%d (%ld px); "
-              L"after erase %ld px", attempt, sent, b1.empty() ? 0 : b1.w(), b1.empty() ? 0 : b1.h(), b1.x0, b1.y0,
-         b1.n, b2.empty() ? 0 : b2.w(), b2.empty() ? 0 : b2.h(), b2.x0, b2.y0, b2.n, settled ? b3.n : -1L);
     if (g_foreign.load() != 0 || !erased_all) return Probe::unsafe;
-    if (sent < 2 || !seen2 || !settled || b1.empty() || b2.empty()) return sent ? Probe::unsafe : Probe::unclear;
-    // (g_foreign was checked above: any outside input during the probe already returned unsafe)
-    if (b3.n > b1.n / 4) return Probe::unsafe;  // the erase did not bring the field back
-    int limit = f0.h / 40;  // a login field glyph is far smaller than 1/40 of the window height
-    if (b1.w() > limit || b1.h() > limit || b2.w() > limit || b2.h() > limit) return Probe::unclear;
-    if (!box_is_game(h, b1) || !box_is_game(h, b2)) return Probe::unclear;
-    bool same_row = abs(b1.y0 - b2.y0) <= 2 && abs(b1.y1 - b2.y1) <= 2;
-    bool right_of = b2.x0 >= b1.x1 - 1;
-    if (!same_row || !right_of) return Probe::unclear;
-    if (b1.w() == b2.w() && b1.h() == b2.h()) {
-        int d = patch_distance(f1, b1, f2, b2);
-        sayf(job, L"autofill: probe %d: same size, pixel distance %d", attempt, d);
-        if (d <= 24) return Probe::masked;  // two copies of one glyph
-        return Probe::clear;                // same size, different pixels: a monospaced clear field
+    if (sent < 2 || !seen2 || !seen3) return sent ? Probe::unsafe : Probe::unclear;
+    int w = f0.w, hh = f0.h;
+    auto m01 = changed(f0, f1), m12 = changed(f1, f2), m23 = changed(f2, g);
+    if (m01.empty() || m12.empty() || m23.empty()) return Probe::unsafe;  // the window changed size mid-probe
+    // the one pair: a blob from the W, and a blob from the i on the same row just right of it
+    std::vector<Box> b1 = blobs(m01, w, hh), b2 = blobs(m12, w, hh);
+    int pairs = 0;
+    Box c1, c2;
+    for (const Box& a : b1)
+        for (const Box& b : b2) {
+            int reach = 3 * (a.w() > a.h() ? a.w() : a.h());
+            if (abs(a.y0 - b.y0) <= 3 && abs(a.y1 - b.y1) <= 3 && b.x0 >= a.x1 - 2 && b.x0 <= a.x1 + reach) {
+                ++pairs;
+                c1 = a;
+                c2 = b;
+            }
+        }
+    if (pairs != 1) {
+        sayf(job, L"autofill: probe %d: %d candidate glyph pairs (%zu and %zu blobs), not on the login field yet",
+             attempt, pairs, b1.size(), b2.size());
+        return Probe::unclear;  // nothing took the keys (no login screen yet), or too much moved to tell
     }
-    return Probe::clear;  // different sizes: W and i drawn as themselves
+    int y0 = c1.y0 < c2.y0 ? c1.y0 : c2.y0, y1 = c1.y1 > c2.y1 ? c1.y1 : c2.y1, band = y1 - y0 + 1;
+    int lo = c1.x0 - 3 * band, hi = c2.x1 + 3 * band;
+    std::vector<int> r12 = caret_runs(m12, w, y0, y1, lo, hi), r23 = caret_runs(m23, w, y0, y1, lo, hi);
+    sayf(job, L"autofill: probe %d: glyph pair at %d,%d and %d,%d (rows %d-%d); caret runs after i %zu, after erase %zu",
+         attempt, c1.x0, c1.y0, c2.x0, c2.y0, y0, y1, r12.size(), r23.size());
+    // after the i the old caret goes and a new one appears: two runs; after the erase the caret at the end goes and
+    // the one at the start appears: two runs, the right one where the i left the caret
+    if (r12.size() != 2 || r23.size() != 2 || abs(r23[1] - r12[1]) > 1) return Probe::unsafe;
+    if (!box_is_game(h, c1) || !box_is_game(h, c2)) return Probe::unsafe;
+    int x0 = r23[0], x1 = r12[0], x2 = r12[1];
+    int adv1 = x1 - x0, adv2 = x2 - x1;
+    sayf(job, L"autofill: probe %d: caret %d -> %d -> %d, advances %d and %d", attempt, x0, x1, x2, adv1, adv2);
+    if (adv1 < 3 || adv2 < 3) return Probe::unsafe;
+    // the erase brought the field back: right of the start caret, the band matches the frame before the probe
+    long long sum = 0, cnt = 0;
+    for (int y = y0; y <= y1; ++y)
+        for (int x = x0 + 3; x <= x2 + adv2; ++x) {
+            if (x < 0 || x >= w) continue;
+            sum += dist(f0, g, (static_cast<size_t>(y) * w + x) * 4);
+            ++cnt;
+        }
+    int rest = cnt ? static_cast<int>(sum / cnt) : 999;
+    if (rest > 30) {
+        sayf(job, L"autofill: probe %d: the field did not come back empty after the erase (distance %d)", attempt, rest);
+        return Probe::unsafe;
+    }
+    if (abs(adv1 - adv2) <= 1) return Probe::masked;  // the same glyph twice: '*'
+    if (adv1 * 2 >= adv2 * 3) return Probe::clear;   // W much wider than i: the text is shown as typed
+    return Probe::unsafe;
 }
 
 // ---- the thread --------------------------------------------------------------------------------------------------
