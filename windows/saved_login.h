@@ -45,7 +45,10 @@ inline DWORD read(const std::wstring& target, Login& login, bool& found) {
     if (credential->CredentialBlob)
         SecureZeroMemory(credential->CredentialBlob, credential->CredentialBlobSize);
     CredFree(credential);
-    if (!shape || !valid(value)) return ERROR_INVALID_DATA;
+    if (!shape || !valid(value)) {
+        if (!value.password.empty()) SecureZeroMemory(&value.password[0], value.password.size() * sizeof(wchar_t));
+        return ERROR_INVALID_DATA;
+    }
     login = std::move(value);
     found = true;
     return ERROR_SUCCESS;

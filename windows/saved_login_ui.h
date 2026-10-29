@@ -42,7 +42,8 @@ inline std::wstring text_of(HWND h) {
     return s;
 }
 
-// Replaces the password control's text with blanks, then empties it, so no copy stays in its buffer.
+// Replaces the password control's text with blanks, then empties it. This overwrites what the control shows; whether
+// the control's earlier internal buffer is overwritten too is not something Win32 promises.
 inline void clear_password(Ui* ui) {
     int n = GetWindowTextLengthW(ui->password);
     std::wstring blank(static_cast<size_t>(n), L' ');
@@ -83,7 +84,11 @@ inline LRESULT CALLBACK login_proc(HWND h, UINT msg, WPARAM w, LPARAM l) {
         return 0;
     case WM_COMMAND:
         if (!ui) break;
-        if (LOWORD(w) == ID_ACCOUNT && HIWORD(w) == CBN_SELCHANGE) {  // a saved login chosen: its password goes in
+        // a saved login chosen, or the list closed (Esc puts the earlier choice back): the password always matches the
+        // login now selected; nothing selected (a typed login) means no password
+        if (LOWORD(w) == ID_ACCOUNT &&
+            (HIWORD(w) == CBN_SELCHANGE || HIWORD(w) == CBN_SELENDOK || HIWORD(w) == CBN_SELENDCANCEL ||
+             HIWORD(w) == CBN_CLOSEUP)) {
             LRESULT i = SendMessageW(ui->account, CB_GETCURSEL, 0, 0);
             clear_password(ui);
             if (i >= 0 && static_cast<size_t>(i) < ui->saved.size())
@@ -122,11 +127,17 @@ inline void wipe_all(std::vector<Login>& v) {
 // `prefix` is the realm's credential prefix. Fills `login`/`fill`. ERROR_SUCCESS with fill=false means manual login.
 inline DWORD choose(const std::wstring& prefix, const std::wstring& realm, Login& login, bool& fill) {
     fill = false;
-    // the one entry of the earlier single-login version moves to the per-account form
+    // the one entry of the earlier single-login version moves to the per-account form, never over an entry that is
+    // already there (that one is newer); the old entry is removed only once the account has its own
     bool old_found = false;
     Login old;
     if (read(prefix, old, old_found) == ERROR_SUCCESS && old_found) {
-        if (write(account_target(prefix, old.account), old) == ERROR_SUCCESS) forget(prefix);
+        Login have;
+        bool have_found = false;
+        DWORD c = read(account_target(prefix, old.account), have, have_found);
+        if (c == ERROR_SUCCESS && !have_found) c = write(account_target(prefix, old.account), old);
+        if (c == ERROR_SUCCESS) forget(prefix);
+        if (!have.password.empty()) SecureZeroMemory(&have.password[0], have.password.size() * sizeof(wchar_t));
         SecureZeroMemory(&old.password[0], old.password.size() * sizeof(wchar_t));
     }
     Ui ui;
