@@ -34,13 +34,13 @@ namespace autofill {
 
 using Log = void (*)(const wchar_t* text);
 
-// A password that is wiped whenever its holder goes away, on every path (a move wipes the source).
+// A password that is wiped whenever its holder goes away, on every path (taking it over wipes the source).
 struct SecretString {
     std::wstring s;
     SecretString() = default;
     SecretString(const SecretString&) = delete;
     SecretString& operator=(const SecretString&) = delete;
-    SecretString(SecretString&& o) noexcept : s(std::move(o.s)) { o.wipe(); }
+    SecretString(SecretString&& o) : s(o.s) { o.wipe(); }  // copy, then wipe: a move may leave short (SSO) text behind
     void wipe() {
         if (!s.empty()) SecureZeroMemory(&s[0], s.size() * sizeof(wchar_t));
         s.clear();
