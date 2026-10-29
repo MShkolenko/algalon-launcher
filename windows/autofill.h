@@ -352,6 +352,13 @@ static Probe probe(const Job& job, HWND h, int attempt) {
         if (n == 2) {
             ++sent;
             seen1 = observe(h, f0, f1, b1);
+            if (seen1 && b1.empty()) {
+                // nothing took the W (no login screen yet): look once more; if it shows up late, stop, else retry
+                Frame late;
+                Box bl;
+                if (!observe(h, f0, late, bl) || bl.n > 0) return Probe::unsafe;
+                return Probe::unclear;
+            }
             if (seen1 && can_type(h)) {
                 n = send_char(L'i');
                 half = n == 1;
@@ -414,13 +421,13 @@ static void run(Job& job) {
         h = game_window(job.pid);
     }
     if (!h) return gave_up(L"no game window");
-    // the login screen: the client logs this line when its login UI asks for a launcher account
-    while (!text_in(job.conn_log, "Launcher account state") && elapsed() < 180) Sleep(500);
-    if (!text_in(job.conn_log, "Launcher account state")) return gave_up(L"the login screen was not seen in the log");
-    Sleep(800);  // the login UI settles right after the log line
+    // No log tells when the login screen is up (the client writes its logs only on exit), so the probe itself is the
+    // readiness test: until a field takes the probe W, nothing changes on screen and it is tried again a second later.
+    Sleep(1000);
     Hooks hooks;
     if (!hooks.start()) return gave_up(L"input hooks unavailable");
-    for (int attempt = 1; attempt <= 6 && elapsed() < 240; ++attempt) {
+    int unclear = 0;
+    for (int attempt = 1; elapsed() < 240; ++attempt) {
         if (text_in(job.conn_log, "Glue login started")) return gave_up(L"a login was started by hand");
         if (!IsWindow(h)) return gave_up(L"the game window closed");
         if (GetForegroundWindow() != h || !input_desktop_normal()) {
@@ -439,6 +446,11 @@ static void run(Job& job) {
         }
         if (p != Probe::masked) {
             g_guard = false;
+            if (++unclear > 150) break;
+            if (job.debug_dir.empty() && attempt > 3) {
+                Sleep(700);  // quiet: the log only names the first attempts unless debugging
+                continue;
+            }
             sayf(job, L"autofill: probe %d %s, retrying", attempt, probe_name(p));
             Sleep(700);
             continue;
