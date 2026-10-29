@@ -330,10 +330,10 @@ static void sayf(const Job& job, const wchar_t* fmt, ...) {
 
 // Wait, capture twice, the settled change against `before`.
 static bool observe(HWND h, const Frame& before, Frame& after, Box& box) {
-    Sleep(350);
+    Sleep(150);  // a frame or two at any playable frame rate
     Frame a;
     if (!grab(h, a)) return false;
-    Sleep(250);
+    Sleep(100);
     if (!grab(h, after)) return false;
     box = settled_change(before, a, after);
     return box.n >= 0;
@@ -367,7 +367,7 @@ static Probe probe(const Job& job, HWND h, int attempt) {
     bool erased_all = true;
     for (int k = 0; k < sent; ++k) {
         if (!can_type(h) || send_vk(VK_BACK) != 2) { erased_all = false; break; }
-        Sleep(120);
+        Sleep(60);
     }
     bool settled = erased_all && observe(h, f0, g, b3) && b3.n >= 0;
     if (!job.debug_dir.empty()) {
@@ -417,7 +417,7 @@ static void run(Job& job) {
     // the login screen: the client logs this line when its login UI asks for a launcher account
     while (!text_in(job.conn_log, "Launcher account state") && elapsed() < 180) Sleep(500);
     if (!text_in(job.conn_log, "Launcher account state")) return gave_up(L"the login screen was not seen in the log");
-    Sleep(3000);
+    Sleep(800);  // the login UI settles right after the log line
     Hooks hooks;
     if (!hooks.start()) return gave_up(L"input hooks unavailable");
     for (int attempt = 1; attempt <= 6 && elapsed() < 240; ++attempt) {
@@ -440,7 +440,7 @@ static void run(Job& job) {
         if (p != Probe::masked) {
             g_guard = false;
             sayf(job, L"autofill: probe %d %s, retrying", attempt, probe_name(p));
-            Sleep(2000);
+            Sleep(700);
             continue;
         }
         if (text_in(job.conn_log, "Glue login started")) return gave_up(L"a login was started by hand");
