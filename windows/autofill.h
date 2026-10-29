@@ -272,7 +272,7 @@ static std::vector<int> caret_runs(const std::vector<unsigned char>& m, int w, i
     if (m.empty()) return runs;
     x0 = x0 < 0 ? 0 : x0;
     x1 = x1 >= w ? w - 1 : x1;
-    int need = (y1 - y0 + 1) * 85 / 100, start = -1;
+    int need = ((y1 - y0 + 1) * 85 + 99) / 100, start = -1;  // rounded up, as in the prototype
     for (int x = x0; x <= x1 + 1; ++x) {
         int n = 0;
         if (x <= x1)
@@ -288,6 +288,7 @@ static std::vector<int> caret_runs(const std::vector<unsigned char>& m, int w, i
 }
 
 static bool box_is_game(HWND h, const Box& b) {
+    if (!h) return true;  // offline tests on saved frames (test_autofill.cpp) have no window
     POINT c{(b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2};
     if (!ClientToScreen(h, &c)) return false;
     HWND at = WindowFromPoint(c);
@@ -364,6 +365,84 @@ static void sayf(const Job& job, const wchar_t* fmt, ...) {
     job.log(buf);
 }
 
+struct Verdict {
+    bool ok = false, masked = false;
+    int y0 = 0, y1 = 0, x0 = 0, x1 = 0, x2 = 0, glyph_distance = 0;
+};
+
+// Mean colour distance over a rectangle between two frames, and how many of its pixels differ clearly.
+static void region_diff(const Frame& a, const Frame& b, int x0, int y0, int x1, int y1, int& mean, long& strong) {
+    long long sum = 0, cnt = 0;
+    strong = 0;
+    for (int y = y0; y <= y1; ++y)
+        for (int x = x0; x <= x1; ++x) {
+            if (x < 0 || y < 0 || x >= a.w || y >= a.h) continue;
+            int d = dist(a, b, (static_cast<size_t>(y) * a.w + x) * 4);
+            sum += d;
+            strong += d > 60;
+            ++cnt;
+        }
+    mean = cnt ? static_cast<int>(sum / cnt) : 999;
+}
+
+// One candidate pair, every check: the caret moved W-wide then i-wide and came back; the first move shows in the W
+// frame; each glyph blob sits in its own caret interval; the erase left the field as it was; then the two glyph
+// images (between the caret positions, caret columns excluded) are compared: the same image twice is a mask.
+static Verdict judge(HWND h, const Frame& f0, const Frame& f1, const Frame& f2, const Frame& g,
+                     const std::vector<unsigned char>& m01, const std::vector<unsigned char>& m12,
+                     const std::vector<unsigned char>& m23, const Box& c1, const Box& c2) {
+    Verdict v;
+    int w = f0.w;
+    int y0 = c1.y0 < c2.y0 ? c1.y0 : c2.y0, y1 = c1.y1 > c2.y1 ? c1.y1 : c2.y1, band = y1 - y0 + 1;
+    if (band < 8) return v;
+    int lo = c1.x0 - 3 * band, hi = c2.x1 + 3 * band;
+    std::vector<int> r01 = caret_runs(m01, w, y0, y1, lo, hi), r12 = caret_runs(m12, w, y0, y1, lo, hi),
+                     r23 = caret_runs(m23, w, y0, y1, lo, hi);
+    // after the i the old caret goes and a new one appears; after the erase the end caret goes and the start one
+    // appears; the W frame shows the caret where the i frame says the old caret was
+    if (r12.size() != 2 || r23.size() != 2 || abs(r23[1] - r12[1]) > 1) return v;
+    int x0 = r23[0], x1 = r12[0], x2 = r12[1];
+    bool w_caret = false;
+    for (int x : r01) w_caret |= abs(x - x1) <= 1;
+    if (!w_caret) return v;
+    int adv1 = x1 - x0, adv2 = x2 - x1;
+    if (adv1 < 3 || adv2 < 3) return v;
+    // each glyph blob lies in its own interval (the caret beside it may extend it by its own width)
+    if (c1.x0 < x0 - 2 || c1.x1 > x1 + 3 || c2.x0 < x1 - 3 || c2.x1 > x2 + 3) return v;
+    if (!box_is_game(h, c1) || !box_is_game(h, c2)) return v;
+    // the erase: right of the start caret, the field is back to the frame before the probe, pixel by pixel
+    int mean = 0;
+    long strong = 0;
+    region_diff(f0, g, x0 + 3, y0, x2 + adv2, y1, mean, strong);
+    if (mean > 30 || strong > (c1.n < c2.n ? c1.n : c2.n) / 4) return v;
+    // the two glyph images, caret columns excluded: W in f1 between x0 and x1, i in f2 between x1 and x2
+    int gw = (adv1 < adv2 ? adv1 : adv2) - 5;
+    if (gw < 2) return v;
+    long long sum = 0, cnt = 0;
+    for (int y = y0; y <= y1; ++y)
+        for (int k = 0; k < gw; ++k) {
+            size_t i = (static_cast<size_t>(y) * w + x0 + 3 + k) * 4, j = (static_cast<size_t>(y) * w + x1 + 3 + k) * 4;
+            sum += abs(f1.px[i] - f2.px[j]) + abs(f1.px[i + 1] - f2.px[j + 1]) + abs(f1.px[i + 2] - f2.px[j + 2]);
+            ++cnt;
+        }
+    v.glyph_distance = static_cast<int>(sum / cnt);
+    // each glyph image really holds a glyph: it differs clearly from the empty field
+    int m1 = 0, m2 = 0;
+    long s1 = 0, s2 = 0;
+    region_diff(f0, f1, x0 + 3, y0, x0 + 2 + gw, y1, m1, s1);
+    region_diff(f1, f2, x1 + 3, y0, x1 + 2 + gw, y1, m2, s2);
+    if (s1 < 6 || s2 < 6) return v;
+    v.ok = true;
+    v.y0 = y0;
+    v.y1 = y1;
+    v.x0 = x0;
+    v.x1 = x1;
+    v.x2 = x2;
+    // a mask: the same advance and the same image twice; anything else is text shown as typed
+    v.masked = abs(adv1 - adv2) <= 1 && v.glyph_distance <= 24;
+    return v;
+}
+
 // After a key: give the game a frame or two, then capture.
 static bool observe(HWND h, Frame& after) {
     Sleep(180);
@@ -418,53 +497,33 @@ static Probe probe(const Job& job, HWND h, int attempt) {
     int w = f0.w, hh = f0.h;
     auto m01 = changed(f0, f1), m12 = changed(f1, f2), m23 = changed(f2, g);
     if (m01.empty() || m12.empty() || m23.empty()) return Probe::unsafe;  // the window changed size mid-probe
-    // the one pair: a blob from the W, and a blob from the i on the same row just right of it
+    // candidate pairs: a blob from the W, and a blob from the i on the same row just right of it; each candidate must
+    // pass every check below, and exactly one may (the embers sometimes make a second, false pair)
     std::vector<Box> b1 = blobs(m01, w, hh), b2 = blobs(m12, w, hh);
-    int pairs = 0;
-    Box c1, c2;
+    int tried = 0, passed = 0;
+    Verdict found{};
     for (const Box& a : b1)
         for (const Box& b : b2) {
             int reach = 3 * (a.w() > a.h() ? a.w() : a.h());
-            if (abs(a.y0 - b.y0) <= 3 && abs(a.y1 - b.y1) <= 3 && b.x0 >= a.x1 - 2 && b.x0 <= a.x1 + reach) {
-                ++pairs;
-                c1 = a;
-                c2 = b;
+            if (abs(a.y0 - b.y0) > 3 || abs(a.y1 - b.y1) > 3 || b.x0 < a.x1 - 2 || b.x0 > a.x1 + reach) continue;
+            ++tried;
+            Verdict v = judge(h, f0, f1, f2, g, m01, m12, m23, a, b);
+            if (v.ok) {
+                ++passed;
+                found = v;
             }
         }
-    if (pairs != 1) {
-        sayf(job, L"autofill: probe %d: %d candidate glyph pairs (%zu and %zu blobs), not on the login field yet",
-             attempt, pairs, b1.size(), b2.size());
-        return Probe::unclear;  // nothing took the keys (no login screen yet), or too much moved to tell
+    sayf(job, L"autofill: probe %d: %d candidate pairs (%zu and %zu blobs), %d passed", attempt, tried, b1.size(),
+         b2.size(), passed);
+    if (passed == 1) {
+        sayf(job, L"autofill: probe %d: rows %d-%d, caret %d -> %d -> %d, glyph distance %d, %s", attempt, found.y0,
+             found.y1, found.x0, found.x1, found.x2, found.glyph_distance, found.masked ? L"masked" : L"clear");
+        return found.masked ? Probe::masked : Probe::clear;
     }
-    int y0 = c1.y0 < c2.y0 ? c1.y0 : c2.y0, y1 = c1.y1 > c2.y1 ? c1.y1 : c2.y1, band = y1 - y0 + 1;
-    int lo = c1.x0 - 3 * band, hi = c2.x1 + 3 * band;
-    std::vector<int> r12 = caret_runs(m12, w, y0, y1, lo, hi), r23 = caret_runs(m23, w, y0, y1, lo, hi);
-    sayf(job, L"autofill: probe %d: glyph pair at %d,%d and %d,%d (rows %d-%d); caret runs after i %zu, after erase %zu",
-         attempt, c1.x0, c1.y0, c2.x0, c2.y0, y0, y1, r12.size(), r23.size());
-    // after the i the old caret goes and a new one appears: two runs; after the erase the caret at the end goes and
-    // the one at the start appears: two runs, the right one where the i left the caret
-    if (r12.size() != 2 || r23.size() != 2 || abs(r23[1] - r12[1]) > 1) return Probe::unsafe;
-    if (!box_is_game(h, c1) || !box_is_game(h, c2)) return Probe::unsafe;
-    int x0 = r23[0], x1 = r12[0], x2 = r12[1];
-    int adv1 = x1 - x0, adv2 = x2 - x1;
-    sayf(job, L"autofill: probe %d: caret %d -> %d -> %d, advances %d and %d", attempt, x0, x1, x2, adv1, adv2);
-    if (adv1 < 3 || adv2 < 3) return Probe::unsafe;
-    // the erase brought the field back: right of the start caret, the band matches the frame before the probe
-    long long sum = 0, cnt = 0;
-    for (int y = y0; y <= y1; ++y)
-        for (int x = x0 + 3; x <= x2 + adv2; ++x) {
-            if (x < 0 || x >= w) continue;
-            sum += dist(f0, g, (static_cast<size_t>(y) * w + x) * 4);
-            ++cnt;
-        }
-    int rest = cnt ? static_cast<int>(sum / cnt) : 999;
-    if (rest > 30) {
-        sayf(job, L"autofill: probe %d: the field did not come back empty after the erase (distance %d)", attempt, rest);
-        return Probe::unsafe;
-    }
-    if (abs(adv1 - adv2) <= 1) return Probe::masked;  // the same glyph twice: '*'
-    if (adv1 * 2 >= adv2 * 3) return Probe::clear;   // W much wider than i: the text is shown as typed
-    return Probe::unsafe;
+    // No pair passed: the keys found no text field (no login screen yet) - an edit box that took them would show
+    // two glyphs and a moving caret. Accepted limit (operator, 2026-10-29): this is screen evidence; the keys were
+    // erased above in any case. More than one passing pair cannot be told apart: stop.
+    return passed == 0 ? Probe::unclear : Probe::unsafe;
 }
 
 // ---- the thread --------------------------------------------------------------------------------------------------
