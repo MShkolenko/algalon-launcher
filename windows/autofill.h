@@ -1,25 +1,33 @@
 // Password autofill for the game login screen (docs/saved-login.md). Runs on its own thread, so the key patch loop and
 // the guard in wWinMain never wait for it. The account is not typed: it is prefilled through SET accountName, and with
 // a remembered account the login screen opens with the focus in the password field. The password is typed only after
-// a positive check that the focused field is masked:
-//   - two probe characters of very different width ('W', then 'i') are typed and each is captured from the screen;
+// a check that the focused field is masked:
+//   - two probe characters of very different shape ('W', then 'i') are typed and each is captured from the screen;
 //     only pixels that changed against the frame before the probe AND stay still across two captures after it count,
 //     which drops the animated background and the blinking caret;
-//   - a masked field draws the same glyph for both: the two changed boxes have the same width and height, sit on one
-//     row, the second right of the first; a clear field draws a wide W and a narrow i;
+//   - a masked field draws the same glyph for both: the two changed boxes have the same size, sit on one row, the
+//     second right of the first, and their pixels match; a clear field draws a W and an i, which differ in pixels even
+//     in a monospaced font;
 //   - the probes are erased with two Backspaces and the erase is checked the same way.
-// While probing and typing, low-level hooks swallow physical keyboard input and mouse buttons (injected events pass),
-// so a click or Tab cannot move the focus mid-way; the game must stay the foreground window before every character.
+// While probing and typing, low-level hooks swallow every keyboard event and mouse button that is not ours (ours carry
+// AUTOFILL_TAG in dwExtraInfo), and any such event stops the fill; the game must be the foreground window, the input
+// desktop must be the normal one and no modifier may be held before every character.
+// Known limit, accepted by the operator (2026-10-29): this is evidence from the screen, not a field-level interface of
+// the client; if the game moved its own focus between the probe and the typing, the password would follow it. The
+// login screen has no reason to, but it cannot be proven from outside. Test with a fictional password first.
 // Any doubt means no password is typed and the player types it. Enter is never pressed. If the player starts a login
-// by hand (Connection.log), autofill stops.
+// by hand (Connection.log, which the launcher deletes before the client starts, so it holds only this run), autofill
+// stops.
 #pragma once
 #include <windows.h>
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace autofill {
@@ -34,16 +42,17 @@ struct Job {
     Log log = nullptr;
 };
 
+static const ULONG_PTR AUTOFILL_TAG = 0x41464C31;  // "AFL1": marks the launcher's own injected events
+
 // ---- input guard: low-level hooks on their own thread with a message loop --------------------------------------
 
 static std::atomic<bool> g_guard{false};
 static std::atomic<int> g_foreign{0};
-static DWORD g_hook_thread = 0;
 
 static LRESULT CALLBACK kb_hook(int code, WPARAM w, LPARAM l) {
     if (code == HC_ACTION && g_guard.load()) {
         auto* k = reinterpret_cast<KBDLLHOOKSTRUCT*>(l);
-        if (!(k->flags & LLKHF_INJECTED)) {
+        if (k->dwExtraInfo != AUTOFILL_TAG) {
             g_foreign.fetch_add(1);
             return 1;  // swallowed: the game never sees it
         }
@@ -53,38 +62,50 @@ static LRESULT CALLBACK kb_hook(int code, WPARAM w, LPARAM l) {
 
 static LRESULT CALLBACK mouse_hook(int code, WPARAM w, LPARAM l) {
     if (code == HC_ACTION && g_guard.load() && w != WM_MOUSEMOVE) {
-        auto* m = reinterpret_cast<MSLLHOOKSTRUCT*>(l);
-        if (!(m->flags & LLMHF_INJECTED)) {
-            g_foreign.fetch_add(1);
-            return 1;
-        }
+        g_foreign.fetch_add(1);  // no mouse event of ours exists
+        return 1;
     }
     return CallNextHookEx(nullptr, code, w, l);
 }
 
-static bool start_hooks() {
-    HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    std::atomic<bool> ok{false};
-    std::thread([&] {
-        g_hook_thread = GetCurrentThreadId();
-        HHOOK kb = SetWindowsHookExW(WH_KEYBOARD_LL, kb_hook, GetModuleHandleW(nullptr), 0);
-        HHOOK ms = SetWindowsHookExW(WH_MOUSE_LL, mouse_hook, GetModuleHandleW(nullptr), 0);
-        ok = kb && ms;
-        SetEvent(ready);
-        MSG msg;
-        while (GetMessageW(&msg, nullptr, 0, 0) > 0) DispatchMessageW(&msg);
-        if (kb) UnhookWindowsHookEx(kb);
-        if (ms) UnhookWindowsHookEx(ms);
-    }).detach();
-    WaitForSingleObject(ready, 5000);
-    CloseHandle(ready);
-    return ok.load();
-}
+// The hook thread and its state belong to one Hooks object; the destructor stops and joins the thread.
+class Hooks {
+public:
+    bool start() {
+        auto st = state_;
+        thread_ = std::thread([st] {
+            MSG msg;
+            PeekMessageW(&msg, nullptr, WM_USER, WM_USER, PM_NOREMOVE);  // the queue exists before ready is signalled
+            st->tid = GetCurrentThreadId();
+            HHOOK kb = SetWindowsHookExW(WH_KEYBOARD_LL, kb_hook, GetModuleHandleW(nullptr), 0);
+            HHOOK ms = kb ? SetWindowsHookExW(WH_MOUSE_LL, mouse_hook, GetModuleHandleW(nullptr), 0) : nullptr;
+            st->ok = kb && ms;
+            st->ready = true;
+            if (st->ok)
+                while (GetMessageW(&msg, nullptr, 0, 0) > 0) DispatchMessageW(&msg);
+            if (kb) UnhookWindowsHookEx(kb);
+            if (ms) UnhookWindowsHookEx(ms);
+        });
+        for (int i = 0; i < 500 && !state_->ready.load(); ++i) Sleep(10);  // the thread owns no local of ours
+        return state_->ready.load() && state_->ok.load();
+    }
+    ~Hooks() {
+        g_guard = false;
+        if (!thread_.joinable()) return;
+        while (!state_->ready.load()) Sleep(10);  // it signals ready on every path; then the quit can be delivered
+        if (state_->ok.load())
+            while (!PostThreadMessageW(state_->tid.load(), WM_QUIT, 0, 0)) Sleep(10);
+        thread_.join();
+    }
 
-static void stop_hooks() {
-    g_guard = false;
-    if (g_hook_thread) PostThreadMessageW(g_hook_thread, WM_QUIT, 0, 0);
-}
+private:
+    struct State {
+        std::atomic<bool> ready{false}, ok{false};
+        std::atomic<DWORD> tid{0};
+    };
+    std::shared_ptr<State> state_ = std::make_shared<State>();
+    std::thread thread_;
+};
 
 // ---- the game window and the screen ------------------------------------------------------------------------------
 
@@ -108,34 +129,65 @@ static HWND game_window(DWORD pid) {
     return f.area >= 640 * 480 ? f.hwnd : nullptr;
 }
 
+// The normal desktop takes input (not the secure desktop of Ctrl+Alt+Del or a lock screen).
+static bool input_desktop_normal() {
+    HDESK d = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
+    if (!d) return false;
+    wchar_t name[64] = {};
+    DWORD need = 0;
+    bool ok = GetUserObjectInformationW(d, UOI_NAME, name, sizeof(name), &need) && _wcsicmp(name, L"Default") == 0;
+    CloseDesktop(d);
+    return ok;
+}
+
+static bool modifiers_up() {
+    const int keys[] = {VK_SHIFT, VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN};
+    for (int k : keys)
+        if (GetAsyncKeyState(k) & 0x8000) return false;
+    return true;
+}
+
+// Everything that must hold before one key goes out.
+static bool can_type(HWND h) {
+    return GetForegroundWindow() == h && input_desktop_normal() && modifiers_up() && g_foreign.load() == 0;
+}
+
 struct Frame {
     int w = 0, h = 0;
     std::vector<unsigned char> px;  // BGRA, top-down
 };
 
 // Screen copy of the window's client area (borderless/windowed DirectX goes through the compositor, so BitBlt of the
-// screen sees it; a window that is not on top would show whatever covers it, which the foreground check rules out).
+// screen sees it). A window covering part of the game would be captured instead; the probe checks that the changed
+// area belongs to the game window.
 static bool grab(HWND h, Frame& f) {
     RECT r;
     POINT o{0, 0};
     if (!GetClientRect(h, &r) || !ClientToScreen(h, &o)) return false;
     f.w = r.right; f.h = r.bottom;
     if (f.w < 640 || f.h < 480) return false;
-    HDC screen = GetDC(nullptr), mem = CreateCompatibleDC(screen);
-    HBITMAP bmp = CreateCompatibleBitmap(screen, f.w, f.h);
-    HGDIOBJ old = SelectObject(mem, bmp);
-    bool ok = BitBlt(mem, 0, 0, f.w, f.h, screen, o.x, o.y, SRCCOPY) != 0;
-    BITMAPINFO bi = {};
-    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
-    bi.bmiHeader.biWidth = f.w;
-    bi.bmiHeader.biHeight = -f.h;
-    bi.bmiHeader.biPlanes = 1;
-    bi.bmiHeader.biBitCount = 32;
-    f.px.assign(static_cast<size_t>(f.w) * f.h * 4, 0);
-    ok = ok && GetDIBits(mem, bmp, 0, f.h, f.px.data(), &bi, DIB_RGB_COLORS) == f.h;
-    SelectObject(mem, old);
-    DeleteObject(bmp);
-    DeleteDC(mem);
+    bool ok = false;
+    HDC screen = GetDC(nullptr);
+    if (!screen) return false;
+    HDC mem = CreateCompatibleDC(screen);
+    HBITMAP bmp = mem ? CreateCompatibleBitmap(screen, f.w, f.h) : nullptr;
+    if (bmp) {
+        HGDIOBJ old = SelectObject(mem, bmp);
+        ok = old && BitBlt(mem, 0, 0, f.w, f.h, screen, o.x, o.y, SRCCOPY) != 0;
+        if (old) SelectObject(mem, old);  // GetDIBits needs the bitmap out of the DC
+        if (ok) {
+            BITMAPINFO bi = {};
+            bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+            bi.bmiHeader.biWidth = f.w;
+            bi.bmiHeader.biHeight = -f.h;
+            bi.bmiHeader.biPlanes = 1;
+            bi.bmiHeader.biBitCount = 32;
+            f.px.assign(static_cast<size_t>(f.w) * f.h * 4, 0);
+            ok = GetDIBits(mem, bmp, 0, f.h, f.px.data(), &bi, DIB_RGB_COLORS) == f.h;
+        }
+        DeleteObject(bmp);
+    }
+    if (mem) DeleteDC(mem);
     ReleaseDC(nullptr, screen);
     return ok;
 }
@@ -153,6 +205,7 @@ struct Box {
 };
 
 // Pixels that differ from `before` in both later captures and are equal between them: what input drew and left.
+// n == -1: the frames cannot be compared.
 static Box settled_change(const Frame& before, const Frame& a, const Frame& b) {
     Box box;
     if (before.w != a.w || a.w != b.w || before.h != a.h || a.h != b.h) { box.n = -1; return box; }
@@ -170,9 +223,29 @@ static Box settled_change(const Frame& before, const Frame& a, const Frame& b) {
     return box;
 }
 
+// Mean colour distance between the box `p` in `fp` and the box `q` in `fq`, aligned at their top-left corners;
+// the boxes must be the same size. Small for two copies of one glyph, large for a W against an i.
+static int patch_distance(const Frame& fp, const Box& p, const Frame& fq, const Box& q) {
+    long long sum = 0;
+    for (int y = 0; y < p.h(); ++y)
+        for (int x = 0; x < p.w(); ++x) {
+            size_t i = (static_cast<size_t>(p.y0 + y) * fp.w + p.x0 + x) * 4;
+            size_t j = (static_cast<size_t>(q.y0 + y) * fq.w + q.x0 + x) * 4;
+            for (int c = 0; c < 3; ++c) sum += abs(fp.px[i + c] - fq.px[j + c]);
+        }
+    return static_cast<int>(sum / (static_cast<long long>(p.w()) * p.h()));
+}
+
+static bool box_is_game(HWND h, const Box& b) {
+    POINT c{(b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2};
+    if (!ClientToScreen(h, &c)) return false;
+    HWND at = WindowFromPoint(c);
+    return at && GetAncestor(at, GA_ROOT) == GetAncestor(h, GA_ROOT);
+}
+
 static void save_bmp(const std::wstring& path, const Frame& f) {
-    FILE* out = _wfopen(path.c_str(), L"wb");
-    if (!out) return;
+    FILE* out = nullptr;
+    if (_wfopen_s(&out, path.c_str(), L"wb") != 0 || !out) return;
     BITMAPFILEHEADER fh = {};
     BITMAPINFOHEADER ih = {};
     ih.biSize = sizeof(ih); ih.biWidth = f.w; ih.biHeight = -f.h; ih.biPlanes = 1; ih.biBitCount = 32;
@@ -193,6 +266,7 @@ static bool send_char(wchar_t c) {
         in[k].type = INPUT_KEYBOARD;
         in[k].ki.wScan = c;
         in[k].ki.dwFlags = KEYEVENTF_UNICODE | (k ? KEYEVENTF_KEYUP : 0);
+        in[k].ki.dwExtraInfo = AUTOFILL_TAG;
     }
     return SendInput(2, in, sizeof(INPUT)) == 2;
 }
@@ -203,6 +277,7 @@ static bool send_vk(WORD vk) {
         in[k].type = INPUT_KEYBOARD;
         in[k].ki.wVk = vk;
         in[k].ki.dwFlags = k ? KEYEVENTF_KEYUP : 0;
+        in[k].ki.dwExtraInfo = AUTOFILL_TAG;
     }
     return SendInput(2, in, sizeof(INPUT)) == 2;
 }
@@ -221,10 +296,10 @@ static bool text_in(const std::wstring& path, const char* needle) {
 
 // ---- the probe ---------------------------------------------------------------------------------------------------
 
-enum class Probe { masked, clear, unclear, interrupted };
+enum class Probe { masked, clear, unclear, unsafe };
 
 static const wchar_t* probe_name(Probe p) {
-    return p == Probe::masked ? L"masked" : p == Probe::clear ? L"clear" : p == Probe::unclear ? L"unclear" : L"interrupted";
+    return p == Probe::masked ? L"masked" : p == Probe::clear ? L"clear" : p == Probe::unclear ? L"unclear" : L"unsafe";
 }
 
 static void sayf(const Job& job, const wchar_t* fmt, ...) {
@@ -237,10 +312,8 @@ static void sayf(const Job& job, const wchar_t* fmt, ...) {
     job.log(buf);
 }
 
-// Type one character, wait, capture twice; the settled change against `before`.
-static bool step(HWND h, wchar_t c, WORD vk, const Frame& before, Frame& after, Box& box) {
-    if (GetForegroundWindow() != h) return false;
-    if (!(c ? send_char(c) : send_vk(vk))) return false;
+// Wait, capture twice, the settled change against `before`.
+static bool observe(HWND h, const Frame& before, Frame& after, Box& box) {
     Sleep(350);
     Frame a;
     if (!grab(h, a)) return false;
@@ -250,63 +323,71 @@ static bool step(HWND h, wchar_t c, WORD vk, const Frame& before, Frame& after, 
     return box.n >= 0;
 }
 
+// unsafe: something that was sent may sit where it was not meant to be; autofill must stop, not retry.
 static Probe probe(const Job& job, HWND h, int attempt) {
-    Frame f0, f1, f2, f3;
+    Frame f0, f1, f2, g;
     Box b1, b2, b3;
-    int foreign = g_foreign.load();
     if (!grab(h, f0)) return Probe::unclear;
-    bool typed1 = step(h, L'W', 0, f0, f1, b1);
-    bool typed2 = typed1 && step(h, L'i', 0, f1, f2, b2);
-    // erase what was typed, then check the screen settled back to the frame before the probe in the probe's area
-    int erase = typed1 + typed2;
-    for (int k = 0; k < erase; ++k) {
-        if (GetForegroundWindow() != h) break;
-        send_vk(VK_BACK);
+    int sent = 0;
+    bool seen1 = false, seen2 = false;
+    if (can_type(h) && send_char(L'W')) {
+        ++sent;
+        seen1 = observe(h, f0, f1, b1);
+        if (seen1 && can_type(h) && send_char(L'i')) {
+            ++sent;
+            seen2 = observe(h, f1, f2, b2);
+        }
+    }
+    // erase exactly what was sent, then check the screen came back to the frame before the probe
+    bool erased_all = true;
+    for (int k = 0; k < sent; ++k) {
+        if (!can_type(h) || !send_vk(VK_BACK)) { erased_all = false; break; }
         Sleep(120);
     }
-    Sleep(400);
-    Frame g1, g2;
-    bool erased = grab(h, g1) && (Sleep(250), grab(h, g2));
-    if (erased) b3 = settled_change(f0, g1, g2);
+    bool settled = erased_all && observe(h, f0, g, b3) && b3.n >= 0;
     if (!job.debug_dir.empty()) {
         std::wstring p = job.debug_dir + L"\\probe" + std::to_wstring(attempt) + L"_";
         save_bmp(p + L"0.bmp", f0);
-        if (typed1) save_bmp(p + L"1.bmp", f1);
-        if (typed2) save_bmp(p + L"2.bmp", f2);
-        if (erased) save_bmp(p + L"3.bmp", g2);
+        if (seen1) save_bmp(p + L"1.bmp", f1);
+        if (seen2) save_bmp(p + L"2.bmp", f2);
+        if (settled) save_bmp(p + L"3.bmp", g);
     }
-    sayf(job, L"autofill: probe %d: W box %dx%d at %d,%d (%ld px); i box %dx%d at %d,%d (%ld px); after erase %ld px",
-         attempt, b1.empty() ? 0 : b1.w(), b1.empty() ? 0 : b1.h(), b1.x0, b1.y0, b1.n, b2.empty() ? 0 : b2.w(),
-         b2.empty() ? 0 : b2.h(), b2.x0, b2.y0, b2.n, erased ? b3.n : -1L);
-    if (g_foreign.load() != foreign) return Probe::interrupted;
-    if (!typed2 || !erased || b1.empty() || b2.empty()) return Probe::unclear;
-    int limit = f0.h / 20;  // a glyph is far smaller than 1/20 of the window height
+    sayf(job, L"autofill: probe %d: sent %d; W box %dx%d at %d,%d (%ld px); i box %dx%d at %d,%d (%ld px); "
+              L"after erase %ld px", attempt, sent, b1.empty() ? 0 : b1.w(), b1.empty() ? 0 : b1.h(), b1.x0, b1.y0,
+         b1.n, b2.empty() ? 0 : b2.w(), b2.empty() ? 0 : b2.h(), b2.x0, b2.y0, b2.n, settled ? b3.n : -1L);
+    if (g_foreign.load() != 0 || !erased_all) return Probe::unsafe;
+    if (sent < 2 || !seen2 || !settled || b1.empty() || b2.empty()) return sent ? Probe::unsafe : Probe::unclear;
+    if (b3.n > b1.n / 4) return Probe::unsafe;  // the erase did not bring the field back
+    int limit = f0.h / 40;  // a login field glyph is far smaller than 1/40 of the window height
     if (b1.w() > limit || b1.h() > limit || b2.w() > limit || b2.h() > limit) return Probe::unclear;
-    if (b3.n > b1.n / 4) return Probe::unclear;  // the erase did not bring the field back
+    if (!box_is_game(h, b1) || !box_is_game(h, b2)) return Probe::unclear;
     bool same_row = abs(b1.y0 - b2.y0) <= 2 && abs(b1.y1 - b2.y1) <= 2;
-    bool right_of = b2.x0 >= b1.x0 + b1.w() / 2;
+    bool right_of = b2.x0 >= b1.x1 - 1;
     if (!same_row || !right_of) return Probe::unclear;
-    int dw = abs(b1.w() - b2.w());
-    if (dw <= 2 + b1.w() / 10 && abs(b1.h() - b2.h()) <= 2) return Probe::masked;
-    if (b1.w() >= 2 * b2.w()) return Probe::clear;  // W is far wider than i in any proportional font
-    return Probe::unclear;
+    if (b1.w() == b2.w() && b1.h() == b2.h()) {
+        int d = patch_distance(f1, b1, f2, b2);
+        sayf(job, L"autofill: probe %d: same size, pixel distance %d", attempt, d);
+        if (d <= 24) return Probe::masked;  // two copies of one glyph
+        return Probe::clear;                // same size, different pixels: a monospaced clear field
+    }
+    return Probe::clear;  // different sizes: W and i drawn as themselves
 }
 
 // ---- the thread --------------------------------------------------------------------------------------------------
 
-static void wipe(std::wstring& s) {
-    if (!s.empty()) SecureZeroMemory(&s[0], s.size() * sizeof(wchar_t));
-    s.clear();
-}
+struct Secret {  // wipes the password on every way out of run()
+    std::wstring& s;
+    ~Secret() {
+        if (!s.empty()) SecureZeroMemory(&s[0], s.size() * sizeof(wchar_t));
+        s.clear();
+    }
+};
 
-static void run(Job job) {
+static void run(Job& job) {
+    Secret secret{job.password};
     ULONGLONG t0 = GetTickCount64();
     auto elapsed = [&] { return (GetTickCount64() - t0) / 1000; };
-    auto gave_up = [&](const wchar_t* why) {
-        sayf(job, L"autofill: not filled (%s); type the password in the game", why);
-        stop_hooks();
-        wipe(job.password);
-    };
+    auto gave_up = [&](const wchar_t* why) { sayf(job, L"autofill: not filled (%s); type the password in the game", why); };
     HWND h = nullptr;
     while (!h && elapsed() < 120) {
         Sleep(500);
@@ -315,21 +396,26 @@ static void run(Job job) {
     if (!h) return gave_up(L"no game window");
     // the login screen: the client logs this line when its login UI asks for a launcher account
     while (!text_in(job.conn_log, "Launcher account state") && elapsed() < 180) Sleep(500);
+    if (!text_in(job.conn_log, "Launcher account state")) return gave_up(L"the login screen was not seen in the log");
     Sleep(3000);
-    if (!start_hooks()) return gave_up(L"input hooks unavailable");
+    Hooks hooks;
+    if (!hooks.start()) return gave_up(L"input hooks unavailable");
     for (int attempt = 1; attempt <= 6 && elapsed() < 240; ++attempt) {
         if (text_in(job.conn_log, "Glue login started")) return gave_up(L"a login was started by hand");
         if (!IsWindow(h)) return gave_up(L"the game window closed");
-        if (GetForegroundWindow() != h) {
+        if (GetForegroundWindow() != h || !input_desktop_normal()) {
             Sleep(1000);
             --attempt;
             continue;
         }
+        g_foreign = 0;
         g_guard = true;
         Probe p = probe(job, h, attempt);
-        if (p == Probe::clear) {
+        if (p == Probe::clear || p == Probe::unsafe) {
             g_guard = false;
-            return gave_up(L"the focused field shows plain text, not the password field");
+            return gave_up(p == Probe::clear ? L"the focused field shows plain text, not the password field"
+                                             : L"the probe was interrupted or could not be erased cleanly; check the "
+                                               L"login fields for stray W/i characters");
         }
         if (p != Probe::masked) {
             g_guard = false;
@@ -337,32 +423,49 @@ static void run(Job job) {
             Sleep(2000);
             continue;
         }
-        // masked field confirmed: type the password, the game must stay in front for every character
+        if (text_in(job.conn_log, "Glue login started")) return gave_up(L"a login was started by hand");
+        // masked field confirmed: type the password; every check holds before every character
         size_t typed = 0;
         for (wchar_t c : job.password) {
-            if (GetForegroundWindow() != h || !send_char(c)) break;
+            if (!can_type(h) || !send_char(c)) break;
             ++typed;
             Sleep(25);
         }
         Sleep(200);
         g_guard = false;
         if (typed != job.password.size()) {
-            // the game lost the front: erase what went into the field (focus is still the masked field, input was held)
-            for (size_t k = 0; k < typed && GetForegroundWindow() == h; ++k) send_vk(VK_BACK);
-            return gave_up(L"the game window lost the focus while typing");
+            // no blind cleanup: where the focus is now is not known
+            sayf(job, L"autofill: stopped after %zu of %zu characters (the game lost the front, the desktop changed, "
+                      L"a key was held or other input came); clear the password field and type it yourself",
+                 typed, job.password.size());
+            return;
         }
         sayf(job, L"autofill: password filled (%zu characters) after %llu s; press Log In in the game", typed,
              (unsigned long long)elapsed());
-        stop_hooks();
-        wipe(job.password);
         return;
     }
     gave_up(L"the password field could not be confirmed");
 }
 
-// Starts the thread; the caller's copy of the password should be wiped after this returns.
+// Starts the thread; the caller wipes its own copy of the password after this returns. Never throws: autofill must
+// not take the launcher down with it.
 inline void start(Job job) {
-    std::thread(run, std::move(job)).detach();
+    try {
+        auto owned = std::make_shared<Job>(std::move(job));
+        std::thread([owned] {
+            try {
+                run(*owned);
+            } catch (...) {
+                if (!owned->password.empty())
+                    SecureZeroMemory(&owned->password[0], owned->password.size() * sizeof(wchar_t));
+                if (owned->log) owned->log(L"autofill: internal error; type the password in the game");
+            }
+            g_guard = false;
+        }).detach();
+    } catch (...) {
+        if (!job.password.empty()) SecureZeroMemory(&job.password[0], job.password.size() * sizeof(wchar_t));
+        if (job.log) job.log(L"autofill: could not start; type the password in the game");
+    }
 }
 
 }  // namespace autofill
