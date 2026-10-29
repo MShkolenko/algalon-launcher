@@ -1267,6 +1267,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     bool fill = false;
     if (!ini.count(L"saved_login") || ini[L"saved_login"] != L"0") {
         DWORD lc = saved_login::choose(cred_target, REALM_NAME, login, fill);
+        if (lc == ERROR_CANCELLED) {
+            say(L"login window closed: the game is not started");
+            return 0;
+        }
         if (lc != ERROR_SUCCESS) {
             say(L"saved login: not used (error %lu), manual login", lc);
             fill = false;

@@ -18,7 +18,8 @@
 //   - With a saved login it shows for AUTO_MS and then plays by itself, unless the player touches it (a key, a mouse
 //     button or the wheel on it); then it waits for Играть. Without a saved login it waits.
 //   - Играть with Запомнить saves that login (one entry per account; the last one used comes first next time);
-//     Играть without Запомнить removes that account's saved entry. Отмена keeps everything and goes to manual login.
+//     Играть without Запомнить removes that account's saved entry. Отмена or closing the window keeps everything
+//     and quits the launcher: the game is not started (operator, 2026-10-29).
 namespace saved_login {
 
 static const UINT AUTO_MS = 3000;
@@ -124,7 +125,8 @@ inline void wipe_all(std::vector<Login>& v) {
     v.clear();
 }
 
-// `prefix` is the realm's credential prefix. Fills `login`/`fill`. ERROR_SUCCESS with fill=false means manual login.
+// `prefix` is the realm's credential prefix. Fills `login`/`fill`. ERROR_CANCELLED: the player closed the window or
+// pressed Отмена, start nothing.
 inline DWORD choose(const std::wstring& prefix, const std::wstring& realm, Login& login, bool& fill) {
     fill = false;
     // the one entry of the earlier single-login version moves to the per-account form, never over an entry that is
@@ -227,7 +229,7 @@ inline DWORD choose(const std::wstring& prefix, const std::wstring& realm, Login
     }
     DeleteObject(ui.font);
 
-    if (!ui.played) return ERROR_SUCCESS;  // Отмена: manual login, saved logins stay
+    if (!ui.played) return ERROR_CANCELLED;  // Отмена or the window closed: saved logins stay, nothing starts
     login = {ui.account_text, ui.password_text};
     if (!valid(login)) {
         if (!login.password.empty()) SecureZeroMemory(&login.password[0], login.password.size() * sizeof(wchar_t));
