@@ -1106,21 +1106,6 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         return SETUP_OK;
     }
 
-    // Several launchers may run at once, one per game client (operator, 2026-10-29: «может я захочу 2-3-10 акков
-    // запустить»). `alive` is held by every launcher for its whole life and only tells whether others run; `single`
-    // is the preparation lock: update, own copy, hosts, settings file and the client start happen under it, one
-    // launcher at a time, and it is released as soon as the client has started.
-    HANDLE alive = CreateMutexW(nullptr, FALSE, L"Local\\" REALM_MUTEX_ID L"LauncherAlive");
-    bool others = alive && GetLastError() == ERROR_ALREADY_EXISTS;
-    HANDLE single = CreateMutexW(nullptr, FALSE, L"Local\\" REALM_MUTEX_ID L"Launcher");
-    if (!single) return fail(L"cannot create the launcher's lock", GetLastError());
-    DWORD lock = WaitForSingleObject(single, 5 * 60 * 1000);  // abandoned: its owner died, the lock is ours now
-    if (lock != WAIT_OBJECT_0 && lock != WAIT_ABANDONED) {
-        MessageBoxW(nullptr, L"Another " REALM_NAME L" launcher is still preparing the game. Try again in a minute.",
-                    REALM_NAME L" launcher", MB_OK | MB_ICONINFORMATION);
-        return 0;
-    }
-
     wchar_t selfbuf[MAX_PATH];
     GetModuleFileNameW(nullptr, selfbuf, MAX_PATH);
     wstr self = selfbuf;
@@ -1151,6 +1136,22 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         return 7;  // test builds only: a new version that dies before confirming, to prove the rollback
 #endif
         upd::confirm_and_clean(self, updated_from, token);
+    }
+    // Several launchers may run at once, one per game client (operator, 2026-10-29: «может я захочу 2-3-10 акков
+    // запустить»). `alive` is held by every launcher for its whole life and only tells whether others run; `single`
+    // is the preparation lock: update, own copy, hosts, settings file and the client start happen under it, one
+    // launcher at a time, and it is released once the client has its window (it has read its settings file by then).
+    // A launcher started by an update confirms first (above), then waits: its predecessor holds the lock until it has
+    // handed over and exited, so no third launcher can slip in between.
+    HANDLE alive = CreateMutexW(nullptr, FALSE, L"Local\\" REALM_MUTEX_ID L"LauncherAlive");
+    bool others = alive && GetLastError() == ERROR_ALREADY_EXISTS;
+    HANDLE single = CreateMutexW(nullptr, FALSE, L"Local\\" REALM_MUTEX_ID L"Launcher");
+    if (!single) return fail(L"cannot create the launcher's lock", GetLastError());
+    DWORD lock = WaitForSingleObject(single, 5 * 60 * 1000);  // abandoned: its owner died, the lock is ours now
+    if (lock != WAIT_OBJECT_0 && lock != WAIT_ABANDONED) {
+        MessageBoxW(nullptr, L"Another " REALM_NAME L" launcher is still preparing the game. Try again in a minute.",
+                    REALM_NAME L" launcher", MB_OK | MB_ICONINFORMATION);
+        return 0;
     }
     wstr ini_path = g_logdir + L"\\launcher.ini";
     Ini ini = read_ini(ini_path);
@@ -1358,6 +1359,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         return fail(L"cannot start the client", GetLastError());
     CloseHandle(pi.hThread);
     say(L"client started, pid %lu; the launcher keeps the server key in place until the game closes", pi.dwProcessId);
+    // the client reads its settings file at start: keep the lock until it has a window (at most 60 s), so the next
+    // launcher cannot rewrite accountName before this client has read its own
+    for (int i = 0; i < 120 && !autofill::game_window(pi.dwProcessId); ++i)
+        if (WaitForSingleObject(pi.hProcess, 500) != WAIT_TIMEOUT) break;
     ReleaseMutex(single);  // preparation is over: the next launcher may start its own client now
     CloseHandle(single);
     single = nullptr;
@@ -1412,8 +1417,17 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     CloseHandle(pi.hProcess);
     say(L"client exited with code %lu; server key set %d time(s)", code, patched);
     if (own_client && patched && exists(own_old)) {  // the new copy has run a real session: the previous one can go
-        wstr own = own_old.substr(0, own_old.size() - 4);
-        if (delete_own(own_old, own)) say(L"own client: previous copy removed");
+        // under the preparation lock: another launcher may be building or replacing the copy right now
+        HANDLE prep = CreateMutexW(nullptr, FALSE, L"Local\\" REALM_MUTEX_ID L"Launcher");
+        DWORD got = prep ? WaitForSingleObject(prep, 10000) : WAIT_FAILED;
+        if (got == WAIT_OBJECT_0 || got == WAIT_ABANDONED) {
+            wstr own = own_old.substr(0, own_old.size() - 4);
+            if (exists(own_old) && delete_own(own_old, own)) say(L"own client: previous copy removed");
+            ReleaseMutex(prep);
+        } else {
+            say(L"own client: another launcher is preparing, the previous copy is left for a later start");
+        }
+        if (prep) CloseHandle(prep);
     }
     if (patch_failed && !patched)
         return fail(L"The game found its key store but the launcher could not set the " REALM_NAME L" server key in it, so the "
