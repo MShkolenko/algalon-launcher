@@ -1065,6 +1065,9 @@ static wstr prepare_own_client(const wstr& root, const wstr& product, const wstr
 }
 
 #include "updater.h"
+#pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "credui.lib")
+#pragma comment(lib, "gdi32.lib")
 #include "saved_login_ui.h"
 #include "autofill.h"
 
