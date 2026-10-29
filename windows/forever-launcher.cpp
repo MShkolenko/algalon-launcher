@@ -1066,6 +1066,7 @@ static wstr prepare_own_client(const wstr& root, const wstr& product, const wstr
 
 #include "updater.h"
 #include "saved_login_ui.h"
+#include "autofill.h"
 
 // ---- main -------------------------------------------------------------------------------------------------------
 
@@ -1312,6 +1313,17 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         return fail(L"cannot start the client", GetLastError());
     CloseHandle(pi.hThread);
     say(L"client started, pid %lu; the launcher keeps the server key in place until the game closes", pi.dwProcessId);
+    if (fill) {  // own thread: the key patch loop below starts at once and never waits for it
+        autofill::Job job;
+        job.pid = pi.dwProcessId;
+        job.password = login.password;
+        job.conn_log = product + L"\\Logs\\Connection.log";
+        if (ini.count(L"autofill_debug") && ini[L"autofill_debug"] == L"1") job.debug_dir = g_logdir;
+        job.log = [](const wchar_t* t) { say(L"%s", t); };
+        autofill::start(std::move(job));
+    }
+    if (!login.password.empty()) SecureZeroMemory(&login.password[0], login.password.size() * sizeof(wchar_t));
+    login = {};
 
     // 6. key store: appears at Login; scan every 0.5 s until the key is set, then every 3 s for re-created stores
     ULONGLONG t0 = GetTickCount64(), next_scan = 0;
