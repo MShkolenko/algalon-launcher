@@ -173,6 +173,9 @@ let session = try launchClient(client, serverIP: "203.0.113.7", resolverLibrary:
                               log: { print($0) })
 let process = session.process
 process.waitUntilExit()
+var exitEvents = 0
+for await _ in session.exited { exitEvents += 1 }
+check(exitEvents == 1, "native exit notification survives a child that exits before UI waiting")
 check(!session.guardLog.finish(), "ordinary child exit does not report an endpoint violation")
 check(process.terminationStatus == 0, "private fixture launches successfully")
 for endpoint in [

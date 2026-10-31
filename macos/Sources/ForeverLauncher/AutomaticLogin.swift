@@ -1,20 +1,11 @@
 import AppKit
+import ApplicationServices
 import Carbon
 import CoreGraphics
 import Darwin
 import Foundation
 import ScreenCaptureKit
 import Vision
-
-enum AutomaticLoginError: String, Error {
-  case permission, unsupported, targetChanged, notReady, input
-}
-
-private func loginProcessMatches(pid: Int32, executable: String) -> Bool {
-  var path = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
-  return proc_pidpath(pid, &path, UInt32(path.count)) > 0
-    && realPath(URL(fileURLWithPath: String(cString: path))) == executable
-}
 
 enum LoginPermission {
   case automatic, manual, cancel
@@ -29,17 +20,24 @@ enum LoginPermission {
     return .manual
   }
   let input = CGPreflightPostEventAccess()
+  let accessibility = AXIsProcessTrusted()
   let capture = CGPreflightScreenCaptureAccess()
   if !input { _ = CGRequestPostEventAccess() }
+  if !accessibility {
+    _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+  }
   if !capture { _ = CGRequestScreenCaptureAccess() }
   while true {
     let inputAllowed = CGPreflightPostEventAccess()
+    let accessibilityAllowed = AXIsProcessTrusted()
     let captureAllowed = CGPreflightScreenCaptureAccess()
-    log("automatic filling permissions: input=\(inputAllowed), capture=\(captureAllowed)")
-    if inputAllowed && captureAllowed { return .automatic }
+    log("automatic filling permissions: input=\(inputAllowed), "
+      + "accessibility=\(accessibilityAllowed), capture=\(captureAllowed)")
+    if inputAllowed && accessibilityAllowed && captureAllowed { return .automatic }
     let alert = NSAlert()
     alert.messageText = "Allow automatic login filling"
-    alert.informativeText = "Accessibility: \(inputAllowed ? "allowed" : "not available to this process"). "
+    alert.informativeText = "Accessibility: \(accessibilityAllowed ? "allowed" : "not available to this process"). "
+      + "Native input: \(inputAllowed ? "allowed" : "not available to this process"). "
       + "Screen Recording: \(captureAllowed ? "allowed" : "not available to this process").\n\n"
       + "macOS requires Accessibility for native input and Screen Recording "
       + "to recognize only the private WoW login window. Images are processed on this Mac, "
@@ -57,6 +55,9 @@ enum LoginPermission {
   }
 }
 
+#if compiler(>=6.2)
+@concurrent
+#endif
 private func recognizedLoginScreen(_ image: CGImage, account: String) async throws
   -> (labels: [LoginLabel: [CGRect]], accounts: [CGRect]) {
   // Only fixed labels and exact expected-account matches cross back to the UI actor.
@@ -76,93 +77,6 @@ private func recognizedLoginScreen(_ image: CGImage, account: String) async thro
     if text.string.caseInsensitiveCompare(account) == .orderedSame { accounts.append(rect) }
   }
   return (labels, accounts)
-}
-
-@MainActor private func assertLoginTarget(pid: Int32, executable: String) throws {
-  guard CGPreflightPostEventAccess(), CGPreflightScreenCaptureAccess() else {
-    throw AutomaticLoginError.permission
-  }
-  guard loginProcessMatches(pid: pid, executable: executable),
-    let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated,
-    app.executableURL?.resolvingSymlinksInPath().path == executable,
-    NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
-    throw AutomaticLoginError.targetChanged
-  }
-}
-
-@MainActor private func loginKey(_ code: CGKeyCode, pid: Int32, executable: String,
-                                flags: CGEventFlags = []) throws {
-  try assertLoginTarget(pid: pid, executable: executable)
-  for down in [true, false] {
-    guard let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down) else {
-      throw AutomaticLoginError.input
-    }
-    event.flags = flags
-    event.postToPid(pid)
-  }
-}
-
-@MainActor private func loginClick(_ point: CGPoint, windowID: CGWindowID, frame: CGRect,
-                                  pid: Int32, executable: String) async throws {
-  try assertLoginTarget(pid: pid, executable: executable)
-  var count: UInt32 = 0
-  guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else {
-    throw AutomaticLoginError.notReady
-  }
-  var displays = [CGDirectDisplayID](repeating: 0, count: Int(count))
-  guard CGGetActiveDisplayList(count, &displays, &count) == .success,
-    displays.prefix(Int(count)).contains(where: { CGDisplayBounds($0).contains(point) }) else {
-    throw AutomaticLoginError.notReady
-  }
-  // Route mouse movement through WindowServer; direct PID clicks retain WoW's old hit target.
-  guard CGWarpMouseCursorPosition(point) == .success else { throw AutomaticLoginError.input }
-  for type in [CGEventType.mouseMoved, .leftMouseDown, .leftMouseUp] {
-    try assertLoginTarget(pid: pid, executable: executable)
-    let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
-      kCGNullWindowID) as? [[String: Any]]
-    let top = windows?.first { item in
-      guard (item[kCGWindowAlpha as String] as? Double ?? 0) > 0,
-        let bounds = item[kCGWindowBounds as String] as? [String: Double],
-        let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { return false }
-      return rect.contains(point)
-    }
-    guard (top?[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid,
-      (top?[kCGWindowNumber as String] as? NSNumber)?.uint32Value == windowID,
-      let bounds = top?[kCGWindowBounds as String] as? [String: Double],
-      let current = CGRect(dictionaryRepresentation: bounds as CFDictionary),
-      abs(current.minX - frame.minX) <= 1, abs(current.minY - frame.minY) <= 1,
-      abs(current.width - frame.width) <= 1, abs(current.height - frame.height) <= 1 else {
-      throw AutomaticLoginError.targetChanged
-    }
-    guard let event = CGEvent(mouseEventSource: nil, mouseType: type,
-      mouseCursorPosition: point, mouseButton: .left) else { throw AutomaticLoginError.input }
-    event.flags = []
-    event.setIntegerValueField(.mouseEventClickState, value: 1)
-    event.post(tap: .cghidEventTap)
-    if type != .leftMouseUp { try await Task.sleep(nanoseconds: 100_000_000) }
-  }
-}
-
-@MainActor private func typeLoginText(_ value: String, pid: Int32,
-                                    executable: String) async throws {
-  try loginKey(CGKeyCode(kVK_ANSI_A), pid: pid, executable: executable, flags: .maskCommand)
-  try loginKey(CGKeyCode(kVK_Delete), pid: pid, executable: executable)
-  for scalar in value.unicodeScalars {
-    try Task.checkCancellation()
-    try assertLoginTarget(pid: pid, executable: executable)
-    let units = Array(String(scalar).utf16)
-    for down in [true, false] {
-      guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: down) else {
-        throw AutomaticLoginError.input
-      }
-      event.flags = []
-      units.withUnsafeBufferPointer {
-        event.keyboardSetUnicodeString(stringLength: $0.count, unicodeString: $0.baseAddress)
-      }
-      event.postToPid(pid)
-    }
-    try await Task.sleep(nanoseconds: 20_000_000)
-  }
 }
 
 @available(macOS 14, *)
@@ -203,7 +117,8 @@ private func recognizedLoginScreen(_ image: CGImage, account: String) async thro
     if !requestedFocus, let app = NSRunningApplication(processIdentifier: pid),
       app.isFinishedLaunching, app.executableURL?.resolvingSymlinksInPath().path == executable {
       // Play may start a background process. Request focus once, never steal it back later.
-      _ = app.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+      NSApplication.shared.yieldActivation(to: app)
+      _ = app.activate()
       requestedFocus = true
     }
     if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
@@ -217,8 +132,12 @@ private func recognizedLoginScreen(_ image: CGImage, account: String) async thro
         try await Task.sleep(nanoseconds: 750_000_000)
         continue
       }
+      let input = try LoginInputGuard(pid: pid, windowID: window.windowID,
+                                     frame: window.frame, anchor: passwordPoint)
+      defer { input.finish() }
+      try input.check()
       try assertLoginTarget(pid: pid, executable: executable)
-      log("automatic filling: login layout admitted")
+      log("automatic filling: login layout admitted; interruption guard active")
       func accountMatches(_ rects: [CGRect]) -> Bool {
         rects.filter { abs($0.midY - layout.account.y) < 0.04
           && abs($0.midX - layout.account.x) < 0.2 }.count == 1
@@ -231,29 +150,55 @@ private func recognizedLoginScreen(_ image: CGImage, account: String) async thro
         let result = try await recognizedLoginScreen(capture, account: expected)
         guard LoginLayout(labels: result.labels) != nil, accountMatches(result.accounts) else {
           // Clear a misplaced nonsecret probe; never leave a secret in the visible account field.
-          try loginKey(CGKeyCode(kVK_ANSI_A), pid: pid, executable: executable, flags: .maskCommand)
-          try loginKey(CGKeyCode(kVK_Delete), pid: pid, executable: executable)
+          try loginKey(CGKeyCode(kVK_ANSI_A), pid: pid, executable: executable, input: input, flags: .maskCommand)
+          try loginKey(CGKeyCode(kVK_Delete), pid: pid, executable: executable, input: input)
           throw AutomaticLoginError.input
         }
       }
       if !accountMatches(initial.accounts) {
         try await loginClick(accountPoint, windowID: window.windowID, frame: window.frame,
-                             pid: pid, executable: executable)
-        try await typeLoginText("AlgalonFocus", pid: pid, executable: executable)
+                             pid: pid, executable: executable, input: input)
+        try await typeLoginText("AlgalonFocus", pid: pid, executable: executable, input: input)
         try await verifyAccount("AlgalonFocus")
-        try await typeLoginText(login.account, pid: pid, executable: executable)
+        try await typeLoginText(login.account, pid: pid, executable: executable, input: input)
         try await verifyAccount(login.account)
         log("automatic filling: account input verified")
       } else {
         log("automatic filling: remembered account retained")
       }
       try await loginClick(passwordPoint, windowID: window.windowID, frame: window.frame,
-                           pid: pid, executable: executable)
+                           pid: pid, executable: executable, input: input)
       try await Task.sleep(nanoseconds: 100_000_000)
-      try await typeLoginText("QQ", pid: pid, executable: executable)
+      try loginKey(CGKeyCode(kVK_ANSI_A), pid: pid, executable: executable, input: input,
+                   flags: .maskCommand)
+      try loginKey(CGKeyCode(kVK_Delete), pid: pid, executable: executable, input: input)
+      func probeFrame() async throws -> MaskedLoginField {
+        try await Task.sleep(nanoseconds: 180_000_000)
+        try input.check()
+        try assertLoginTarget(pid: pid, executable: executable)
+        guard let (current, capture, rect) = try await captureLoginWindow(pid: pid),
+          current.windowID == window.windowID, current.frame == window.frame,
+          rect == contentRect,
+          let band = MaskedLoginField(image: capture, region: layout.passwordBand) else {
+          throw AutomaticLoginError.targetChanged
+        }
+        return band
+      }
+      let empty = try await probeFrame()
+      try await typeLoginText("W", pid: pid, executable: executable, input: input, clear: false)
+      let wide = try await probeFrame()
+      try await typeLoginText("i", pid: pid, executable: executable, input: input, clear: false)
+      let pair = try await probeFrame()
+      try loginKey(CGKeyCode(kVK_Delete), pid: pid, executable: executable, input: input)
+      try loginKey(CGKeyCode(kVK_Delete), pid: pid, executable: executable, input: input)
+      let erased = try await probeFrame()
+      guard MaskedLoginField.confirms(empty: empty, wide: wide, pair: pair, erased: erased) else {
+        throw AutomaticLoginError.input
+      }
       try await verifyAccount(login.account)
-      log("automatic filling: password focus control passed")
-      try await typeLoginText(login.password, pid: pid, executable: executable)
+      try input.requireLiveTaps()
+      log("automatic filling: masked password focus and probe removal confirmed")
+      try await typeLoginText(login.password, pid: pid, executable: executable, input: input)
       try await verifyAccount(login.account)
       return // Filling is automatic; submitting Log In stays an explicit action.
     }

@@ -1065,10 +1065,22 @@ static wstr prepare_own_client(const wstr& root, const wstr& product, const wstr
 }
 
 #include "updater.h"
+#pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "credui.lib")
+#pragma comment(lib, "gdi32.lib")
+#include "saved_login_ui.h"
+#include "autofill.h"
 
 // ---- main -------------------------------------------------------------------------------------------------------
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
+    // DPI aware before any window: the login window draws sharp text at 125-150 % scaling instead of a stretched
+    // bitmap, and autofill's window rectangles and screen captures are in real pixels. Per-monitor v2 where Windows
+    // has it (10 1703+), else system-aware.
+    using SetCtx = BOOL(WINAPI*)(HANDLE);
+    auto set_ctx = reinterpret_cast<SetCtx>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetProcessDpiAwarenessContext"));
+    if (!set_ctx || !set_ctx(reinterpret_cast<HANDLE>(-4)))  // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+        SetProcessDPIAware();
     int argc = __argc;
     wchar_t** argv = __wargv;
     g_logdir = data_dir();
@@ -1092,12 +1104,6 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         }
         say(L"setup: done");
         return SETUP_OK;
-    }
-
-    HANDLE single = CreateMutexW(nullptr, TRUE, L"Local\\" REALM_MUTEX_ID L"Launcher");
-    if (single && GetLastError() == ERROR_ALREADY_EXISTS) {
-        MessageBoxW(nullptr, L"The " REALM_NAME L" launcher is already running.", REALM_NAME L" launcher", MB_OK | MB_ICONINFORMATION);
-        return 0;
     }
 
     wchar_t selfbuf[MAX_PATH];
@@ -1131,10 +1137,28 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
 #endif
         upd::confirm_and_clean(self, updated_from, token);
     }
+    // Several launchers may run at once, one per game client (operator, 2026-10-29: «может я захочу 2-3-10 акков
+    // запустить»). `alive` is held by every launcher for its whole life and only tells whether others run; `single`
+    // is the preparation lock: update, own copy, hosts, settings file and the client start happen under it, one
+    // launcher at a time, and it is released once the client has its window (it has read its settings file by then).
+    // A launcher started by an update confirms first (above), then waits: its predecessor holds the lock until it has
+    // handed over and exited, so no third launcher can slip in between.
+    HANDLE alive = CreateMutexW(nullptr, FALSE, L"Local\\" REALM_MUTEX_ID L"LauncherAlive");
+    bool others = alive && GetLastError() == ERROR_ALREADY_EXISTS;
+    HANDLE single = CreateMutexW(nullptr, FALSE, L"Local\\" REALM_MUTEX_ID L"Launcher");
+    if (!single) return fail(L"cannot create the launcher's lock", GetLastError());
+    DWORD lock = WaitForSingleObject(single, 5 * 60 * 1000);  // abandoned: its owner died, the lock is ours now
+    if (lock != WAIT_OBJECT_0 && lock != WAIT_ABANDONED) {
+        MessageBoxW(nullptr, L"Another " REALM_NAME L" launcher is still preparing the game. Try again in a minute.",
+                    REALM_NAME L" launcher", MB_OK | MB_ICONINFORMATION);
+        return 0;
+    }
     wstr ini_path = g_logdir + L"\\launcher.ini";
     Ini ini = read_ini(ini_path);
     if (!updated_from) {
-        if (exists(self + L".old")) {
+        if (others) {  // the running ones started from this file: replacing it under them is not worth it
+            say(L"update: other launchers are running, the update check waits for a start without them");
+        } else if (exists(self + L".old")) {
             say(L"update: %s.old is left from an interrupted update; it may be the only good copy, so it is kept and no "
                 L"update is tried until it is removed or renamed back", self.c_str());
         } else if (!ini.count(L"update") || ini[L"update"] != L"0") {
@@ -1205,10 +1229,20 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             return fail((L"The World of Warcraft folder " + client + L" is reached through a link, SUBST drive, short or network "
                          L"name (it resolves to " + (canon.empty() ? wstr(L"?") : canon) + L"). The launcher's own game copy needs "
                          L"the real folder: choose it again, or set own_client=0 in launcher.ini to use the shared cache.").c_str());
-        if (client_running())
-            return fail(L"World of Warcraft is already running. Close the game (also the official one) and start the launcher again.");
-        archive_official_wdb(product);
-        wstr why, own_product = prepare_own_client(client, product, base_name(exe), why);
+        wstr why, own_product;
+        if (client_running()) {
+            // another client runs (ours or the official one): nothing is copied, archived or rebuilt under it; an
+            // existing own copy is started as it is, a refresh waits for a start with no game running
+            wstr own = product + OWN_SUFFIX;
+            if (!exists(own + L"\\" + base_name(exe)))
+                return fail(L"World of Warcraft is already running and the launcher's own copy of the game does not exist yet. "
+                            L"Close the game (also the official one) and start the launcher again.");
+            say(L"own client: a game is already running, the copy is used as it is (no refresh now)");
+            own_product = own;
+        } else {
+            archive_official_wdb(product);
+            own_product = prepare_own_client(client, product, base_name(exe), why);
+        }
         if (own_product.empty())
             return fail((L"Cannot prepare the launcher's own copy of the game: " + why +
                          L"\n\nThe official game folder was not changed.").c_str());
@@ -1242,25 +1276,63 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         say(L"setup: done");
     }
 
-    // 4. our own settings file: a copy of Config.wtf with our portal; Config.wtf itself stays as Blizzard left it
+    // 3a. saved login (docs/saved-login.md): the account goes into the settings file below, the password is filled by
+    // autofill.h only after it proves the masked password field has the focus. Cancel means manual login.
+    const wstr cred_target = L"" REALM_LONG_NAME L"/" + ini[L"portal"];
+    saved_login::Login login;
+    struct WipeLogin {  // every return of wWinMain from here on wipes the password
+        std::wstring& p;
+        ~WipeLogin() {
+            if (!p.empty()) SecureZeroMemory(&p[0], p.size() * sizeof(wchar_t));
+        }
+    } wipe_login{login.password};
+    bool fill = false;
+    if (!ini.count(L"saved_login") || ini[L"saved_login"] != L"0") {
+        DWORD lc = saved_login::choose(cred_target, REALM_NAME, login, fill);
+        if (lc == ERROR_CANCELLED) {
+            say(L"login window closed: the game is not started");
+            return 0;
+        }
+        if (lc != ERROR_SUCCESS) {
+            say(L"saved login: not used (error %lu), manual login", lc);
+            fill = false;
+        } else if (fill && login.account.find_first_of(L"\"\\") != wstr::npos) {
+            say(L"saved login: the account contains a quote or backslash and cannot go into the settings file, manual login");
+            fill = false;
+        }
+        say(L"saved login: %s", fill ? L"account prefilled, password autofill armed" : L"manual login");
+    }
+    if (!fill) {
+        SecureZeroMemory(&login.password[0], login.password.size() * sizeof(wchar_t));
+        login = {};
+    }
+
+    // 4. our own settings file with our portal; Config.wtf itself stays as Blizzard left it. In the own copy the base is
+    // our file itself when it exists (the client saves its settings there on exit, the copy has no Config.wtf); before,
+    // it was rebuilt from nothing on every start and the player's settings were lost. Otherwise the base is Config.wtf.
     wstr wtf = product + L"\\WTF";
     CreateDirectoryW(wtf.c_str(), nullptr);
     std::string raw;
-    wstr cfg = wtf + L"\\Config.wtf";
-    if (exists(cfg) && !read_file(cfg, raw)) return fail(L"Config.wtf exists but cannot be read; close the game and try again", GetLastError());
-    if (raw.empty()) say(L"settings: no Config.wtf yet, the client starts with its defaults");
+    wstr own_cfg = wtf + L"\\" + ini[L"config"];
+    wstr cfg = own_client && exists(own_cfg) ? own_cfg : wtf + L"\\Config.wtf";
+    if (exists(cfg) && !read_file(cfg, raw)) return fail(L"the game settings file exists but cannot be read; close the game and try again", GetLastError());
+    if (raw.empty()) say(L"settings: no saved settings yet, the client starts with its defaults");
+    else say(L"settings: based on %s", cfg.c_str());
     // Exactly one portal, textLocale and audioLocale line in the end (any spacing in the source, last value wins for the
     // locales). A config without a locale makes the release client open its region picker and reset the portal.
+    // With a saved login, exactly one accountName line carries the saved account and the client's accountList is dropped
+    // so an old list cannot contradict it.
     wstr text, have_text, have_audio;
     for (const wstr& line : lines_of(to_wide(raw))) {
         wstr k, v;
-        if (parse_set(line, k, v) && (k == L"portal" || k == L"textlocale" || k == L"audiolocale")) {
+        if (parse_set(line, k, v) && (k == L"portal" || k == L"textlocale" || k == L"audiolocale" || (fill && (k == L"accountname" || k == L"accountlist")))) {
             if (k == L"textlocale") have_text = v;
             if (k == L"audiolocale") have_audio = v;
             continue;
         }
         text += line + L"\r\n";
     }
+    if (fill) text += L"SET accountName \"" + login.account + L"\"\r\n";
     wstr loc = ini.count(L"locale") && !ini[L"locale"].empty() ? ini[L"locale"] : default_locale(client, product);
     if (have_text.empty()) have_text = loc;
     if (have_audio.empty()) have_audio = loc;
@@ -1273,7 +1345,11 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
 
     // 5. start the client with our settings file. The previous Connection.log goes first (it is in our own copy and no
     // client runs now): the guard below reads the new log from its start and must not see an old session's host.
-    DeleteFileW((product + L"\\Logs\\Connection.log").c_str());
+    if (!DeleteFileW((product + L"\\Logs\\Connection.log").c_str())) {  // another running client may hold it
+        DWORD e = GetLastError();
+        if (e != ERROR_FILE_NOT_FOUND && e != ERROR_PATH_NOT_FOUND)
+            say(L"settings: the previous Connection.log could not be removed (error %lu)", e);
+    }
     STARTUPINFOW si = {sizeof(si)};
     PROCESS_INFORMATION pi = {};
     wstr cmdline = L"\"" + exe + L"\" -config " + ini[L"config"];
@@ -1283,6 +1359,25 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         return fail(L"cannot start the client", GetLastError());
     CloseHandle(pi.hThread);
     say(L"client started, pid %lu; the launcher keeps the server key in place until the game closes", pi.dwProcessId);
+    // the client reads its settings file at start: keep the lock until it has a window, or until it is gone, so the
+    // next launcher cannot rewrite accountName before this client has read its own (no time limit: a launcher that
+    // waits gives up by itself after 5 minutes with a message)
+    while (!autofill::game_window(pi.dwProcessId))
+        if (WaitForSingleObject(pi.hProcess, 500) != WAIT_TIMEOUT) break;
+    ReleaseMutex(single);  // preparation is over: the next launcher may start its own client now
+    CloseHandle(single);
+    single = nullptr;
+    if (fill) {  // own thread: the key patch loop below starts at once and never waits for it
+        autofill::Job job;
+        job.pid = pi.dwProcessId;
+        job.password.s = login.password;
+        job.conn_log = product + L"\\Logs\\Connection.log";
+        if (ini.count(L"autofill_debug") && ini[L"autofill_debug"] == L"1") job.debug_dir = g_logdir;
+        job.log = [](const wchar_t* t) { say(L"%s", t); };
+        autofill::start(std::move(job));
+    }
+    if (!login.password.empty()) SecureZeroMemory(&login.password[0], login.password.size() * sizeof(wchar_t));
+    login = {};
 
     // 6. key store: appears at Login; scan every 0.5 s until the key is set, then every 3 s for re-created stores
     ULONGLONG t0 = GetTickCount64(), next_scan = 0;
@@ -1323,11 +1418,21 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     CloseHandle(pi.hProcess);
     say(L"client exited with code %lu; server key set %d time(s)", code, patched);
     if (own_client && patched && exists(own_old)) {  // the new copy has run a real session: the previous one can go
-        wstr own = own_old.substr(0, own_old.size() - 4);
-        if (delete_own(own_old, own)) say(L"own client: previous copy removed");
+        // under the preparation lock: another launcher may be building or replacing the copy right now
+        HANDLE prep = CreateMutexW(nullptr, FALSE, L"Local\\" REALM_MUTEX_ID L"Launcher");
+        DWORD got = prep ? WaitForSingleObject(prep, 10000) : WAIT_FAILED;
+        if (got == WAIT_OBJECT_0 || got == WAIT_ABANDONED) {
+            wstr own = own_old.substr(0, own_old.size() - 4);
+            if (exists(own_old) && delete_own(own_old, own)) say(L"own client: previous copy removed");
+            ReleaseMutex(prep);
+        } else {
+            say(L"own client: another launcher is preparing, the previous copy is left for a later start");
+        }
+        if (prep) CloseHandle(prep);
     }
     if (patch_failed && !patched)
         return fail(L"The game found its key store but the launcher could not set the " REALM_NAME L" server key in it, so the "
                     L"login to " REALM_NAME L" could not succeed. Run the launcher again; if it repeats, send launcher.log.");
+    say(L"launcher exits");
     return 0;
 }

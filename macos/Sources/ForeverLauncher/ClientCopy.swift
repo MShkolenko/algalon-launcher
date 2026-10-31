@@ -313,7 +313,8 @@ func privateConfiguration(_ cl: Client) throws -> String {
 // Write only private settings and launch the copy with its private configuration.
 
 func launchClient(_ cl: Client, serverIP: String, resolverLibrary: URL,
-                  log: (String) -> Void) throws -> (process: Process, guardLog: ConnectionGuard) {
+                  log: (String) -> Void) throws
+  -> (process: Process, guardLog: ConnectionGuard, exited: AsyncStream<Void>) {
     try assertPrivateIsolated(cl)
     if anotherWowRunning() {
         throw CopyError.message("a WoW client is already running. Quit it first: both clients share the game data folder.")
@@ -330,6 +331,12 @@ func launchClient(_ cl: Client, serverIP: String, resolverLibrary: URL,
     log("wrote \(C.configName): portal \(C.portalLine)")
 
     let game = Process()
+    let exited = AsyncStream<Void>(bufferingPolicy: .bufferingNewest(1)) { continuation in
+      game.terminationHandler = { _ in
+        continuation.yield(())
+        continuation.finish()
+      }
+    }
     game.executableURL = cl.privateBinary
     game.currentDirectoryURL = cl.privateProduct
     game.arguments = ["-config", C.configName]
@@ -360,5 +367,5 @@ func launchClient(_ cl: Client, serverIP: String, resolverLibrary: URL,
       throw error
     }
     log("client launched, pid \(game.processIdentifier)")
-    return (game, guardLog)
+    return (game, guardLog, exited)
 }

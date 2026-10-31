@@ -27,12 +27,45 @@ let layout = LoginLayout(labels: labels)
 check(layout != nil && abs(layout!.account.y - 0.3175) < 0.00001)
 check(abs(layout!.password.y - 0.3825) < 0.00001)
 let offsetFrame = CGRect(x: -1200, y: 90, width: 1000, height: 700)
-let content = CGRect(x: 0, y: 20, width: 1000, height: 680)
+let content = offsetFrame
 let screen = layout!.screenPoint(layout!.password, frame: offsetFrame, content: content)
 check(screen != nil && abs(screen!.x + 700) < 0.00001
-  && abs(screen!.y - 370.1) < 0.00001)
+  && abs(screen!.y - 357.75) < 0.00001)
 check(layout!.screenPoint(layout!.password, frame: offsetFrame,
-  content: CGRect(x: 0, y: 0, width: 1001.1, height: 700)) == nil)
+  content: CGRect(x: -1200, y: 90, width: 1001.1, height: 700)) == nil)
+// Native windowed Retina capture: contentRect and frame have the same screen origin.
+let windowed = CGRect(x: 704, y: 382, width: 640, height: 388)
+check(layout!.screenPoint(CGPoint(x: 0.5, y: 0.5), frame: windowed, content: windowed)
+  == CGPoint(x: 1024, y: 576))
+let fullscreen = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+check(layout!.screenPoint(CGPoint(x: 0.5, y: 0.5), frame: fullscreen, content: fullscreen)
+  == CGPoint(x: 960, y: 540))
+for bad in [CGRect(x: 0, y: 0, width: 640, height: 388),
+            CGRect(x: 704, y: 382, width: 0, height: 388),
+            CGRect(x: CGFloat.infinity, y: 382, width: 640, height: 388)] {
+  check(layout!.screenPoint(layout!.password, frame: windowed, content: bad) == nil)
+}
+check(layout!.screenPoint(CGPoint(x: .nan, y: 0.5), frame: windowed, content: windowed) == nil)
+check(layout!.screenPoint(CGPoint(x: 0.5, y: 0.5),
+  frame: CGRect(x: -500, y: -200, width: 1280, height: 800),
+  content: CGRect(x: 0, y: 0, width: 700, height: 500)) == nil)
+for edge in 0..<4 {
+  for delta in [-1.1, -1.0, 1.0, 1.1] {
+    var capture = windowed
+    switch edge {
+    case 0:
+      capture.origin.x += delta
+      capture.size.width -= delta
+    case 1: capture.size.width += delta
+    case 2:
+      capture.origin.y += delta
+      capture.size.height -= delta
+    default: capture.size.height += delta
+    }
+    let point = layout!.screenPoint(CGPoint(x: 0.5, y: 0.5), frame: windowed, content: capture)
+    check((point != nil) == (abs(delta) <= 1))
+  }
+}
 for kind in LoginLabel.allCases {
   var missing = labels
   missing[kind] = []

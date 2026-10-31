@@ -15,7 +15,7 @@ if not defined VS (echo Visual Studio with the C++ desktop tools not found & exi
 call "%VS%\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
 set "OUT=%PROFILE%-launcher.exe"
 rc /nologo /i "profiles\%PROFILE%" /fo launcher.res "profiles\%PROFILE%\launcher.rc" || exit /b 1
-cl /nologo /std:c++17 /O2 /MT /EHsc /W4 /Brepro /DUNICODE /D_UNICODE /I "profiles\%PROFILE%" forever-launcher.cpp launcher.res /Fe:"%OUT%" /link /SUBSYSTEM:WINDOWS /Brepro shell32.lib ole32.lib user32.lib crypt32.lib ws2_32.lib
+cl /nologo /utf-8 /std:c++17 /O2 /MT /EHsc /W4 /Brepro /DUNICODE /D_UNICODE /I "profiles\%PROFILE%" forever-launcher.cpp launcher.res /Fe:"%OUT%" /link /SUBSYSTEM:WINDOWS /MANIFEST:EMBED /Brepro shell32.lib ole32.lib user32.lib crypt32.lib ws2_32.lib advapi32.lib credui.lib
 set rc=%errorlevel%
 del /q forever-launcher.obj launcher.res 2>nul
 if %rc% neq 0 exit /b %rc%

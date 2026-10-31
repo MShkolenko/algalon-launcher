@@ -5,7 +5,6 @@
 import AppKit
 import Darwin
 import Foundation
-import MachKeyStore
 
 // ---- logging ----------------------------------------------------------------------------------------
 let logURL: URL = {
@@ -43,64 +42,6 @@ func fail(_ message: String) -> Never {
     log("ERROR: \(message)")
     dialog("\(message)\n\nDetails: \(logURL.path)")
     exit(1)
-}
-
-// ---- the runtime key patch loop ---------------------------------------------------------------------
-// Returns true once the server key is confirmed in the client's key store. Scans every 500 ms until then
-// (the store appears after Login), then every 3 s to re-patch if the client rebuilds it, as the Windows
-// launcher does. A write that fails against a located store is a hard error.
-func patchLoop(pid: Int32, game: Process) -> Bool {
-    var knownFlat = [UInt8]()
-    for hex in C.knownHex {
-        guard let b = hexToBytes(hex, 32) else { fail("bad known key constant") }
-        knownFlat += b
-    }
-    let flags = C.flags
-    guard let newkey = hexToBytes(C.newKeyHex, 32) else { fail("bad server key constant") }
-
-    var task = task_t()
-    var haveTask = false
-    var confirmed = false
-    var warnedAttach = false
-    var heartbeat = 0
-
-    while game.isRunning {
-        if !haveTask {
-            let kr = ks_task_for_pid(pid, &task)
-            if kr == KERN_SUCCESS {
-                haveTask = true
-                log("attached to client task")
-            } else if !warnedAttach {
-                warnedAttach = true
-                log("task_for_pid not yet granted (kr=\(kr)); if macOS shows a developer-tools prompt, allow it")
-            }
-        }
-        if haveTask {
-            var res = ks_result()
-            knownFlat.withUnsafeBufferPointer { kp in
-                flags.withUnsafeBufferPointer { fp in
-                    newkey.withUnsafeBufferPointer { np in
-                        ks_scan_and_patch(task, kp.baseAddress, fp.baseAddress, np.baseAddress, Int32(C.group), &res)
-                    }
-                }
-            }
-            if res.write_errors > 0 {
-                fail("A key store was found but could not be patched (\(res.write_errors) write error(s)). The client was left running; quit it and retry.")
-            }
-            if res.patched_now > 0 {
-                log("patched \(res.patched_now) key store(s) to the server key")
-                confirmed = true
-            } else if res.already_patched > 0 && !confirmed {
-                log("key store already carries the server key")
-                confirmed = true
-            }
-        }
-        heartbeat += 1
-        if heartbeat % 60 == 0 { log("running; key installed=\(confirmed)") }
-        usleep(confirmed ? 3_000_000 : 500_000)
-    }
-    log("client exited")
-    return confirmed
 }
 
 // ---- entry ------------------------------------------------------------------------------------------
@@ -166,7 +107,7 @@ if setupNeeded() {
 }
 
 Task { @MainActor in
-  let session: (process: Process, guardLog: ConnectionGuard)
+  let session: (process: Process, guardLog: ConnectionGuard, exited: AsyncStream<Void>)
   var loginForLaunch: SavedLogin?
   switch await chooseSavedLogin(service: "com.algaloncore.launcher.login.\(C.id).\(C.hostName)",
                          realm: C.longName) {
@@ -197,6 +138,12 @@ Task { @MainActor in
   } catch { fail("Launching the client failed: \(error)") }
 
   let game = session.process
+  let keys: RegionKeyMonitor
+  do {
+    keys = try RegionKeyMonitor(game: game, executable: realPath(client.privateBinary),
+                               log: { message in log(message) })
+    log("region-key monitoring started independently of automatic filling")
+  } catch { fail("Region-key monitoring could not start; check the launcher profile.") }
   if let login = loginForLaunch {
       do {
           try await fillPrivateLogin(login, pid: game.processIdentifier,
@@ -205,24 +152,38 @@ Task { @MainActor in
       } catch {
         let reason = (error as? AutomaticLoginError)?.rawValue ?? "native capture error"
         log("automatic login filling did not complete (\(reason)); saved entry retained")
-        NSApplication.shared.unhide(nil)
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.messageText = "Automatic filling stopped"
-        alert.informativeText = "The saved login was retained. Check the game window before "
-          + "entering the server. Details are in the launcher log."
-        _ = await presentLoginAlert(alert)
-        NSApplication.shared.hide(nil)
+        if game.isRunning {
+          NSApplication.shared.unhide(nil)
+          NSApplication.shared.activate(ignoringOtherApps: true)
+          let alert = NSAlert()
+          alert.messageText = "Automatic filling stopped"
+          if (error as? AutomaticLoginError) == .secureInput {
+            alert.informativeText = "WoW is using macOS Secure Input. This version cannot safely "
+              + "fill its password field automatically. Your saved login was retained. "
+              + "Continue manually in WoW and review both fields before Log In."
+          } else {
+            alert.informativeText = "The saved login was retained. Fields may be partially filled. "
+              + "Review both fields before Log In. Details are in the launcher log."
+          }
+          _ = await presentLoginAlert(alert)
+          NSApplication.shared.hide(nil)
+        }
       }
   }
   loginForLaunch = nil
-  let patched = patchLoop(pid: game.processIdentifier, game: game)
+  // Native exit notification keeps the UI/taps responsive without an idle polling loop.
+  for await _ in session.exited {}
   game.waitUntilExit()
+  let outcome = await keys.finish()
+  log("client exited")
+  if outcome.failure != nil {
+    fail("Region-key monitoring failed. Check the launcher log for the reason.")
+  }
   if session.guardLog.finish() {
       fail("Stopped the private client: its login endpoint changed or the fresh connection log "
         + "could not be monitored. Check the private portal before retrying.")
   }
-  if !patched {
+  if !outcome.confirmed {
       log("client exited without a completed realm login; no region-key installation confirmed")
   }
   if game.terminationReason != .exit || game.terminationStatus != 0 {

@@ -6,6 +6,9 @@ consent. No game files, credentials, session proofs, private signing keys or raw
 
 See [remembered server login](../docs/saved-login.md) for the native login form,
 Keychain storage, optional macOS14 autofill permissions and current acceptance limits.
+Current1.2.1 is a review candidate: client70658 windowed account placement is confirmed,
+but password autofill stops at the game's Secure Input boundary. It is not a working
+autofill release. See [the current review record](reports/2026-11-01-native-login-review.md).
 
 ## Profiles and build
 
@@ -16,9 +19,10 @@ preprocessed by the native compiler and consumed as string literals by `packagin
 The generator derives the private product path and both certificate fingerprints; there is no
 second manually maintained copy of the CA or update key in the Mac code.
 
-Requirements: macOS with Xcode command-line tools, Swift 5.7 or later, and Python 3. The declared
-deployment target is macOS 12. The verified build environment is Xcode 27 / Apple Swift 6.4 on
-macOS 27.0.1. Intel hardware and older supported OS versions have not been exercised.
+Requirements: Xcode command-line tools with the macOS14 SDK or newer, Swift5.7 or later, and Python3.
+The declared deployment target is macOS12; optional automatic filling requires macOS14. The current
+verified build environment is Xcode27 / Apple Swift6.4.2 on macOS27.2. ScreenCaptureKit is weak-linked
+in both architecture slices. Intel hardware and older supported OS versions have not been exercised.
 
 From the repository root:
 
@@ -42,7 +46,9 @@ The default is hardened ad-hoc signing. A distributor may set `FOREVER_SIGN_IDEN
 installed Developer ID Application identity. The script signs the library before the outer bundle
 and verifies the complete result with `codesign --verify --deep --strict`. Signing identities and
 private keys are never build inputs stored in Git. Developer ID distribution, notarization and
-Gatekeeper installation on a clean Mac remain pending the owner's distribution decision.
+Gatekeeper installation on a clean Mac have not been exercised. The owner explicitly chose
+ad-hoc distribution without Developer ID or notarization; renewed Keychain/TCC approvals after
+binary changes are accepted. Do not bypass those checks to hide prompts.
 
 To package a verified bundle without losing its symlinks or signature:
 
@@ -97,6 +103,13 @@ DNS/transport checks provide the earlier guard for the intercepted APIs.
 The runtime scanner accepts only a complete validated 12-entry Blizzard key table. It replaces
 region group 8 in private process memory and confirms the write. No disk key patch is made. A
 failed login before the realm stage does not prove key-table incompatibility.
+Monitoring starts immediately after the owned client launches on an independent serial native
+timer. Screen recognition and an indefinitely open filling-error dialog do not delay it. A failed
+validated write stops only the matching owned private client, and its failure is checked at exit.
+The UI awaits a buffered native process-exit notification rather than polling while the game runs.
+Quitting normally before authentication is intentionally quiet: no missing-key error dialog is
+shown, because cancellation is not evidence of an incompatible table. Authentication errors remain
+visible in the game and its private Connection.log; abnormal client exits still raise an error.
 
 ## Verification and current scope
 

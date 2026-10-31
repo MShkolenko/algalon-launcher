@@ -20,15 +20,18 @@ enum LoginLabel: String, CaseIterable, Sendable {
 struct LoginLayout: Sendable {
   let account: CGPoint
   let password: CGPoint
+  let passwordBand: CGRect
 
   func screenPoint(_ field: CGPoint, frame: CGRect, content: CGRect) -> CGPoint? {
-    guard [frame.minX, frame.minY, frame.width, frame.height,
+    guard [field.x, field.y, frame.minX, frame.minY, frame.width, frame.height,
       content.minX, content.minY, content.width, content.height].allSatisfy(\.isFinite),
+      (0...1).contains(field.x), (0...1).contains(field.y),
       frame.width > 0, frame.height > 0, content.width > 0, content.height > 0,
-      content.minX >= 0, content.minY >= 0,
-      content.maxX <= frame.width + 1, content.maxY <= frame.height + 1 else { return nil }
-    return CGPoint(x: frame.minX + content.minX + field.x * content.width,
-                   y: frame.minY + content.minY + field.y * content.height)
+      abs(content.minX - frame.minX) <= 1, abs(content.minY - frame.minY) <= 1,
+      abs(content.maxX - frame.maxX) <= 1, abs(content.maxY - frame.maxY) <= 1 else { return nil }
+    // ScreenCaptureKit's contentRect already uses screen points, including the window origin.
+    return CGPoint(x: content.minX + field.x * content.width,
+                   y: content.minY + field.y * content.height)
   }
 
   // Rectangles use normalized top-left coordinates, independent of Retina scale.
@@ -48,5 +51,8 @@ struct LoginLayout: Sendable {
       (0.005...0.15).contains(l.minY - r.maxY) else { return nil }
     account = CGPoint(x: a.midX, y: (a.maxY + p.minY) / 2)
     password = CGPoint(x: a.midX, y: (p.maxY + r.minY) / 2)
+    let band = (r.minY - p.maxY) / 2
+    passwordBand = CGRect(x: a.midX - 0.14, y: password.y - band / 2,
+                          width: 0.28, height: band)
   }
 }
