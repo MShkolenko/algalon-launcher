@@ -33,6 +33,32 @@ Tests ran on macOS27.2 / Apple Swift6.4.2; declared minimum12, autofill14.
   Subsequent real normal quits completed without that warning. The fix narrows
   that race; it does not prove that every Mach/BSD teardown overlap is quiet.
 
+## Comparison with the accepted October27 implementation
+
+The accepted1.2.0 source6664218 used PID-targeted native CGEvent Unicode delivery.
+It had no IsSecureEventInputEnabled refusal. Its actual70630 saved-entry account,
+realm and world acceptance is recorded in2026-10-27-native-login.md.
+
+The1.2.1 guard adds that refusal both at initialization and before input. The
+current70658 secureInput result is raised by this launcher policy before password
+text is posted. It does not establish that macOS rejects the accepted CGEvent
+route. The unsuccessful insertText/NSEvent experiments used different delivery
+APIs and do not refute the historical method. External keyboard-tap observability
+under Secure Input remains a separate cancellation constraint; deleting the guard
+would not establish that requirement.
+
+A fictional-only comparison of the historical CGEvent route is prepared, with the
+window-coordinate correction retained. It has not run on70658: an official WoW
+session is active, and the diagnostic launcher correctly refused a simultaneous
+private client using the shared game data. The official session was left running.
+No saved credential was read and no login was submitted for this comparison.
+
+The accepted local1.2.0 was Development-signed; installed1.2.1 is ad-hoc signed.
+Both pass strict verification. The different signing identity explains renewed
+Keychain authorization and is separate from text delivery. The owner's public
+ad-hoc distribution policy remains unchanged. No protected authorization dialog
+was automated and no saved-entry ACL was changed.
+
 ## Independent validation and limits
 
 The native two-process input fixture passed20 scenarios on the preceding reviewed
