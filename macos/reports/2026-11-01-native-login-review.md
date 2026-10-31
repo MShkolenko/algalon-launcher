@@ -47,11 +47,43 @@ APIs and do not refute the historical method. External keyboard-tap observabilit
 under Secure Input remains a separate cancellation constraint; deleting the guard
 would not establish that requirement.
 
-A fictional-only comparison of the historical CGEvent route is prepared, with the
-window-coordinate correction retained. It has not run on70658: an official WoW
-session is active, and the diagnostic launcher correctly refused a simultaneous
-private client using the shared game data. The official session was left running.
-No saved credential was read and no login was submitted for this comparison.
+The first prepared comparison was held while official WoW was active; the launcher
+correctly refused simultaneous private-copy preparation. After the operator closed
+the official session, the private copy refreshed to release1.60.1.70707 and launched
+in a small window. A fictional-only A/B ran on the same process at00:54–01:02MSK.
+The historical CGEvent Unicode route filled the exact fictional account and four
+masked password glyphs while Secure Input was enabled. Ownership was not queried
+for70707; this is a timed focus correlation, not a fresh ownership proof. The diagnostic
+retained the current coordinate correction and effective AX window-target check:
+the historical rectangle-only topmost check rejected a click-through sharing overlay.
+This is historical text delivery with targeting compatibility, not the unchanged
+historical application. No saved credential was read and Log In was never submitted.
+
+Between controls the window was raised and the account field clicked, returning
+focus to the nonsecret field. On that same70707 process, currentf161128 initialized the guard with Secure Input
+false, admitted the login layout and retained the verified fictional account. It
+then refused secureInput at password focus, before W/i proof or password delivery.
+An earlier current-code attempt refused targetChanged before admission; it is kept
+as a separate failed focus control. Neither attempt is authentication acceptance.
+The successful historical route does not establish foreign-input cancellation under
+Secure Input and does not authorize deleting the new guard.
+The diagnostic historical typeLoginText body was independently byte-matched to
+6664218; the current implementation differs in Unicode key-up handling, nonce
+tagging and active filtering taps. Those combinations remain untested under
+Secure Input. This A/B does not prove the current code works after deleting a check.
+
+A new read-only Opus5.5 MAX-effort review confirmed the regression conclusion
+and identified the provenance, run-order and ownership qualifications recorded
+above. It did not accept a replacement input design. A same-process native local
+monitor remains a hypothesis: documented AppKit event monitoring covers sendEvent
+dispatch, not proof of this game's event path, tag fidelity, event ordering or
+queued-input suppression. No cooperative monitor/IPC was implemented or adopted.
+An external per-character alternative leaves an acknowledged one-character
+focus race and was not accepted as meeting the full cancellation requirement.
+
+The game quit normally at01:01:54MSK; the independent region monitor completed
+without an error popup. No key installation was expected without a login attempt.
+No game, helper or diagnostic launcher remained running after this comparison.
 
 The accepted local1.2.0 was Development-signed; installed1.2.1 is ad-hoc signed.
 Both pass strict verification. The different signing identity explains renewed
