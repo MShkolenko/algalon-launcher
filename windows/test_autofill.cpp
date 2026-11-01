@@ -25,22 +25,23 @@ static bool load(const std::wstring& path, Frame& f) {
     return ok;
 }
 
-// The detector part of probe(): what judge() says about every candidate pair. 1 masked, 2 clear, 0 none, -1 several.
+// The detector part of probe(): what judge() says about every candidate pair. 1 masked, 2 clear, 0 none, -1 several fields.
 static int detect(const Frame& f0, const Frame& f1, const Frame& f2, const Frame& g, Verdict& out) {
     auto m01 = changed(f0, f1), m12 = changed(f1, f2), m23 = changed(f2, g);
     std::vector<Box> b1 = blobs(m01, f0.w, f0.h), b2 = blobs(m12, f0.w, f0.h);
-    int passed = 0;
+    std::vector<Verdict> fields;  // as probe(): passing pairs that measure the same field count once
     for (const Box& a : b1)
         for (const Box& b : b2) {
             int reach = 3 * (a.w() > a.h() ? a.w() : a.h());
             if (abs(a.y0 - b.y0) > 3 || abs(a.y1 - b.y1) > 3 || b.x0 < a.x1 - 2 || b.x0 > a.x1 + reach) continue;
             Verdict v = judge(nullptr, f0, f1, f2, g, m01, m12, m23, a, b);
-            if (v.ok) {
-                ++passed;
-                out = v;
-            }
+            if (!v.ok) continue;
+            bool known = false;
+            for (const Verdict& f : fields) known = known || same_field(f, v);
+            if (!known) fields.push_back(v);
         }
-    return passed == 1 ? (out.masked ? 1 : 2) : passed == 0 ? 0 : -1;
+    if (fields.size() == 1) out = fields[0];
+    return fields.size() == 1 ? (out.masked ? 1 : 2) : fields.empty() ? 0 : -1;
 }
 
 static int failures = 0;
