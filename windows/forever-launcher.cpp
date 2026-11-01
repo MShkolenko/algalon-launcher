@@ -52,10 +52,12 @@ static const wchar_t* SUFFIX = L".actual.battle.net";
 // always carries textLocale and audioLocale (see default_locale); with them the client keeps our portal.
 static const wchar_t* DEF_EXE = L"_forever_\\Wow.exe";
 static const wchar_t* KNOWN_EXES[] = {L"_forever_\\Wow.exe", L"_classic_beta_\\WowB.exe"};
-// REALM_SERVER answers on 1120 (login), 8082 (REST) and 8090 (world). The hosts line gets the address it
-// resolves to at launch time.
+// REALM_SERVER answers on 21843 (login), 22517 (REST) and 23964 (world) since 2026-11-01 (1120/8082/8090 before).
+// The hosts line gets the address it resolves to at launch time.
 static const wchar_t* DEF_SERVER = REALM_SERVER;
-static const wchar_t* DEF_PORTAL = REALM_PORTAL L":1120";
+static const wchar_t* DEF_PORTAL = REALM_PORTAL L":21843";
+// launcher.ini keeps the portal it was first given; the realm left 1120 on 2026-11-01, so that one value is migrated
+static const wchar_t* OLD_PORTAL = REALM_PORTAL L":1120";
 static const wchar_t* DEF_CONFIG = REALM_CONFIG;
 static const wchar_t* DEF_KEY = L"02596F0D0C061A8B30745988FD72C59E29EC367FB0F341F28E0F08D037BAFC69";  // stock TrinityCore
 static const int DEF_GROUP = 8;
@@ -1182,6 +1184,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                                                         {L"key", DEF_KEY},       {L"group", std::to_wstring(DEF_GROUP)}};
     for (const auto& d : defaults)
         if (!ini.count(d.first)) ini[d.first] = d.second;
+    if (ini[L"portal"] == OLD_PORTAL) {
+        say(L"settings: portal %s -> %s (the realm moved off the standard ports)", OLD_PORTAL, DEF_PORTAL);
+        ini[L"portal"] = DEF_PORTAL;
+    }
     wstr client = ini.count(L"client") ? ini[L"client"] : L"";
     // the configured client first, then the known layouts (release _forever_\Wow.exe, old beta _classic_beta_\WowB.exe)
     auto find_exe = [&](const wstr& root) -> wstr {
@@ -1278,7 +1284,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
 
     // 3a. saved login (docs/saved-login.md): the account goes into the settings file below, the password is filled by
     // autofill.h only after it proves the masked password field has the focus. Cancel means manual login.
-    const wstr cred_target = L"" REALM_LONG_NAME L"/" + ini[L"portal"];
+    // saved logins stay under the name they were saved with before the port move, so nobody re-types a password
+    const wstr cred_target = L"" REALM_LONG_NAME L"/" + (ini[L"portal"] == DEF_PORTAL ? wstr(OLD_PORTAL) : ini[L"portal"]);
     saved_login::Login login;
     struct WipeLogin {  // every return of wWinMain from here on wipes the password
         std::wstring& p;
