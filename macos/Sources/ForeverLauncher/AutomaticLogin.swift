@@ -104,11 +104,12 @@ private func recognizedLoginScreen(_ image: CGImage, account: String) async thro
 }
 
 @MainActor func fillPrivateLogin(_ login: SavedLogin, pid: Int32, executable: String,
-                               log: (String) -> Void) async throws {
+                               channel: LoginInputChannel, log: (String) -> Void) async throws {
   guard login.isValid else { throw SavedLoginError.invalid }
   guard #available(macOS 14, *) else { throw AutomaticLoginError.unsupported }
   let deadline = ProcessInfo.processInfo.systemUptime + 90
   var requestedFocus = false
+  var clickedFocus = false
   while ProcessInfo.processInfo.systemUptime < deadline {
     try Task.checkCancellation()
     guard loginProcessMatches(pid: pid, executable: executable) else {
@@ -118,11 +119,10 @@ private func recognizedLoginScreen(_ image: CGImage, account: String) async thro
       app.isFinishedLaunching, app.executableURL?.resolvingSymlinksInPath().path == executable {
       // Play may start a background process. Request focus once, never steal it back later.
       NSApplication.shared.yieldActivation(to: app)
-      _ = app.activate()
+      _ = app.activate(from: .current, options: .activateAllWindows)
       requestedFocus = true
     }
-    if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
-      let (window, image, contentRect) = try await captureLoginWindow(pid: pid) {
+    if let (window, image, contentRect) = try await captureLoginWindow(pid: pid) {
       let initial = try await recognizedLoginScreen(image, account: login.account)
       guard let layout = LoginLayout(labels: initial.labels),
         let accountPoint = layout.screenPoint(layout.account, frame: window.frame,
@@ -132,9 +132,17 @@ private func recognizedLoginScreen(_ image: CGImage, account: String) async thro
         try await Task.sleep(nanoseconds: 750_000_000)
         continue
       }
+      if NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
+        guard !clickedFocus else { throw AutomaticLoginError.targetChanged }
+        clickedFocus = true
+        try await activateLoginWindow(accountPoint, windowID: window.windowID,
+          frame: window.frame, pid: pid, executable: executable)
+        log("native login window activated before filling")
+      }
       let input = try LoginInputGuard(pid: pid, windowID: window.windowID,
-                                     frame: window.frame, anchor: passwordPoint)
+                                     frame: window.frame, anchor: passwordPoint, channel: channel)
       defer { input.finish() }
+      try await input.arm()
       try input.check()
       try assertLoginTarget(pid: pid, executable: executable)
       log("automatic filling: login layout admitted; interruption guard active")
@@ -150,8 +158,8 @@ private func recognizedLoginScreen(_ image: CGImage, account: String) async thro
         let result = try await recognizedLoginScreen(capture, account: expected)
         guard LoginLayout(labels: result.labels) != nil, accountMatches(result.accounts) else {
           // Clear a misplaced nonsecret probe; never leave a secret in the visible account field.
-          try loginKey(CGKeyCode(kVK_ANSI_A), pid: pid, executable: executable, input: input, flags: .maskCommand)
-          try loginKey(CGKeyCode(kVK_Delete), pid: pid, executable: executable, input: input)
+          try await loginKey(CGKeyCode(kVK_ANSI_A), pid: pid, executable: executable, input: input, flags: .maskCommand)
+          try await loginKey(CGKeyCode(kVK_Delete), pid: pid, executable: executable, input: input)
           throw AutomaticLoginError.input
         }
       }
@@ -169,9 +177,9 @@ private func recognizedLoginScreen(_ image: CGImage, account: String) async thro
       try await loginClick(passwordPoint, windowID: window.windowID, frame: window.frame,
                            pid: pid, executable: executable, input: input)
       try await Task.sleep(nanoseconds: 100_000_000)
-      try loginKey(CGKeyCode(kVK_ANSI_A), pid: pid, executable: executable, input: input,
+      try await loginKey(CGKeyCode(kVK_ANSI_A), pid: pid, executable: executable, input: input,
                    flags: .maskCommand)
-      try loginKey(CGKeyCode(kVK_Delete), pid: pid, executable: executable, input: input)
+      try await loginKey(CGKeyCode(kVK_Delete), pid: pid, executable: executable, input: input)
       func probeFrame() async throws -> MaskedLoginField {
         try await Task.sleep(nanoseconds: 180_000_000)
         try input.check()
@@ -189,17 +197,19 @@ private func recognizedLoginScreen(_ image: CGImage, account: String) async thro
       let wide = try await probeFrame()
       try await typeLoginText("i", pid: pid, executable: executable, input: input, clear: false)
       let pair = try await probeFrame()
-      try loginKey(CGKeyCode(kVK_Delete), pid: pid, executable: executable, input: input)
-      try loginKey(CGKeyCode(kVK_Delete), pid: pid, executable: executable, input: input)
+      try await loginKey(CGKeyCode(kVK_Delete), pid: pid, executable: executable, input: input)
+      try await loginKey(CGKeyCode(kVK_Delete), pid: pid, executable: executable, input: input)
       let erased = try await probeFrame()
       guard MaskedLoginField.confirms(empty: empty, wide: wide, pair: pair, erased: erased) else {
         throw AutomaticLoginError.input
       }
       try await verifyAccount(login.account)
-      try input.requireLiveTaps()
+      try input.requireDeliveryProof()
+      try await input.requireSecureField()
       log("automatic filling: masked password focus and probe removal confirmed")
       try await typeLoginText(login.password, pid: pid, executable: executable, input: input)
       try await verifyAccount(login.account)
+      try await input.complete()
       return // Filling is automatic; submitting Log In stays an explicit action.
     }
     try await Task.sleep(nanoseconds: 750_000_000)

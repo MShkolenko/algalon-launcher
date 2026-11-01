@@ -6,9 +6,11 @@ consent. No game files, credentials, session proofs, private signing keys or raw
 
 See [remembered server login](../docs/saved-login.md) for the native login form,
 Keychain storage, optional macOS14 autofill permissions and current acceptance limits.
-Current1.2.1 is a review candidate: client70658 windowed account placement is confirmed,
-but password autofill stops at the game's Secure Input boundary. It is not a working
-autofill release. See [the current review record](reports/2026-11-01-native-login-review.md).
+Candidate1.2.2 repairs the1.2.1 Secure Input regression and follows the current
+portal21843/LoginREST22517 contract. Installed saved-entry autofill, account/realm
+login, one region key, an existing character, visual world loading and clean exit
+passed on70707. See [the acceptance record](reports/2026-11-01-native-input-repair.md)
+for35 actual native controls, signing limits and measured scanner resource cost.
 
 ## Profiles and build
 
@@ -90,10 +92,19 @@ missing, macOS requires the player's separate confirmation before adding it.
 The bundled resolver/trust/proxy library is admitted only in the canonical private executable
 selected for that launch. Its canonical path must also have the profile's private-product suffix.
 Process-local DNS redirects only the expected realm alias. Other Battle.net login aliases are
-refused. The `connect` interposition admits login traffic only to the selected IPv4 on port 1120;
+refused. The `connect` interposition admits login traffic only to the selected IPv4 on port 21843;
+legacy login ports1119/1120 remain refused, even for the selected address;
 other ordinary ports retain native behavior. These are scoped `getaddrinfo`/`connect` checks, not
-a claim to mediate every socket API. Only HTTPS to the exact realm on port 8082 receives the
+a claim to mediate every socket API. Only HTTPS to the exact realm on port 22517 receives the
 existing process-local proxy exception.
+
+The [November1 server migration](https://github.com/MShkolenko/algalon-mac/issues/1#issuecomment-6557144306)
+uses portal21843 and LoginREST22517. The shared Mac profile generator supplies both
+Swift and C constants. Existing private settings migrate from the old portal while
+retaining graphics and both locales. The world port is announced by the server
+(currently23964); it is not substituted in the launcher. The site is
+https://algaloncore.com:24713. The reissued leaf certificate supplies its new CRL
+distribution point; there is no launcher CRL-URL or certificate-verification override.
 
 A fresh private `Connection.log` is monitored, with prior logs retained in `Logs/Previous`.
 Unexpected or malformed logon endpoints stop the exact owned child after checking its canonical

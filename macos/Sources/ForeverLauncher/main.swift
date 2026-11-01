@@ -107,7 +107,8 @@ if setupNeeded() {
 }
 
 Task { @MainActor in
-  let session: (process: Process, guardLog: ConnectionGuard, exited: AsyncStream<Void>)
+  let session: (process: Process, guardLog: ConnectionGuard, exited: AsyncStream<Void>,
+                input: LoginInputChannel?)
   var loginForLaunch: SavedLogin?
   switch await chooseSavedLogin(service: "com.algaloncore.launcher.login.\(C.id).\(C.hostName)",
                          realm: C.longName) {
@@ -130,11 +131,11 @@ Task { @MainActor in
       log("login cancelled")
       exit(0)
   }
-  NSApplication.shared.hide(nil)
   do {
       let library = Bundle.main.bundleURL
         .appendingPathComponent("Contents/Frameworks/libRealmDNS.dylib")
-      session = try launchClient(client, serverIP: ip, resolverLibrary: library, log: log)
+      session = try launchClient(client, serverIP: ip, resolverLibrary: library,
+        automaticInput: loginForLaunch != nil, log: log)
   } catch { fail("Launching the client failed: \(error)") }
 
   let game = session.process
@@ -144,12 +145,22 @@ Task { @MainActor in
                                log: { message in log(message) })
     log("region-key monitoring started independently of automatic filling")
   } catch { fail("Region-key monitoring could not start; check the launcher profile.") }
+  if loginForLaunch == nil,
+    let running = NSRunningApplication(processIdentifier: game.processIdentifier) {
+    if #available(macOS 14, *) { NSApplication.shared.yieldActivation(to: running) }
+    _ = running.activate(options: .activateAllWindows)
+    NSApplication.shared.hide(nil)
+  }
   if let login = loginForLaunch {
       do {
+          guard let input = session.input else { throw AutomaticLoginError.input }
+          try await input.start()
+          log("native input channel handshake acknowledged")
           try await fillPrivateLogin(login, pid: game.processIdentifier,
-                                   executable: realPath(client.privateBinary), log: log)
+            executable: realPath(client.privateBinary), channel: input, log: log)
           log("automatic login fields filled; Log In remains an explicit action")
       } catch {
+        session.input?.abort()
         let reason = (error as? AutomaticLoginError)?.rawValue ?? "native capture error"
         log("automatic login filling did not complete (\(reason)); saved entry retained")
         if game.isRunning {
@@ -157,20 +168,15 @@ Task { @MainActor in
           NSApplication.shared.activate(ignoringOtherApps: true)
           let alert = NSAlert()
           alert.messageText = "Automatic filling stopped"
-          if (error as? AutomaticLoginError) == .secureInput {
-            alert.informativeText = "WoW is using macOS Secure Input. This version cannot safely "
-              + "fill its password field automatically. Your saved login was retained. "
-              + "Continue manually in WoW and review both fields before Log In."
-          } else {
-            alert.informativeText = "The saved login was retained. Fields may be partially filled. "
-              + "Review both fields before Log In. Details are in the launcher log."
-          }
+          alert.informativeText = "The saved login was retained. Fields may be partially filled. "
+            + "Review both fields before Log In. Details are in the launcher log."
           _ = await presentLoginAlert(alert)
           NSApplication.shared.hide(nil)
         }
       }
   }
   loginForLaunch = nil
+  NSApplication.shared.hide(nil)
   // Native exit notification keeps the UI/taps responsive without an idle polling loop.
   for await _ in session.exited {}
   game.waitUntilExit()

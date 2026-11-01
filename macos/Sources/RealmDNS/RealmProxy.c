@@ -8,7 +8,7 @@ static CFArrayRef realmProxies(CFURLRef url, CFDictionaryRef settings) {
   int saved = errno;
   CFStringRef host = url ? CFURLCopyHostName(url) : NULL;
   CFStringRef scheme = url ? CFURLCopyScheme(url) : NULL;
-  int realm = host && scheme && CFURLGetPortNumber(url)==8082
+  int realm = host && scheme && CFURLGetPortNumber(url)==REALM_LOGIN_REST_PORT
       && CFStringCompare(scheme,CFSTR("https"),kCFCompareCaseInsensitive)==kCFCompareEqualTo
       && CFStringCompare(host,CFSTR(REALM_HOST),kCFCompareCaseInsensitive)==kCFCompareEqualTo;
   if (host) CFRelease(host);

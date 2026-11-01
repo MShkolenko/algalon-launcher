@@ -1,5 +1,8 @@
 # Mac native-login review continuation
 
+Historical1.2.1 review. The subsequent1.2.2 repair and its separately qualified
+acceptance are recorded in [the native input repair](2026-11-01-native-input-repair.md).
+
 Status: work in progress. This is not an accepted password-autofill release.
 Candidate:1.2.1(9). Reconciled main:53698e4. Client:1.60.1.70658 release arm64.
 Tests ran on macOS27.2 / Apple Swift6.4.2; declared minimum12, autofill14.

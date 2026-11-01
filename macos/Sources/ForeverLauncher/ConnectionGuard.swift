@@ -69,7 +69,7 @@ final class ConnectionGuard {
         }
         pending.removeSubrange(...newline)
         if text.contains("Battle.net logon requested") {
-          let expected = "Battle.net logon requested host=\"\(C.hostName)\" port=\"1120\""
+          let expected = "Battle.net logon requested host=\"\(C.hostName)\" port=\"\(C.loginPort)\""
           guard text.trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased().hasSuffix(expected.lowercased()) else {
             throw CopyError.message("unexpected login endpoint")

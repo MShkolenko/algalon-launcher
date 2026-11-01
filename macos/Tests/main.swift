@@ -169,21 +169,27 @@ for state in ["WTF/settings", "Cache/private", "Screenshots/saved"] {
 }
 check(try snapshot(client.officialProduct) == original, "refresh preserves official file contents")
 let resolver = URL(fileURLWithPath: CommandLine.arguments[1])
+setenv("FOREVER_INPUT_FIXTURE", "1", 1)
+setenv("FOREVER_INPUT_CHANNEL", "1", 1)
 let session = try launchClient(client, serverIP: "203.0.113.7", resolverLibrary: resolver,
                               log: { print($0) })
+unsetenv("FOREVER_INPUT_FIXTURE")
+unsetenv("FOREVER_INPUT_CHANNEL")
 let process = session.process
 process.waitUntilExit()
 var exitEvents = 0
 for await _ in session.exited { exitEvents += 1 }
 check(exitEvents == 1, "native exit notification survives a child that exits before UI waiting")
 check(!session.guardLog.finish(), "ordinary child exit does not report an endpoint violation")
-check(process.terminationStatus == 0, "private fixture launches successfully")
-for endpoint in [
+check(process.terminationStatus == 0, "manual launch strips inherited input and fixture markers")
+let refusedEndpoints = [
   "host=\"eu.actual.battle.net\" port=\"1119\"",
   "host=\"algalon.actual.battle.net\" port=\"1119\"",
-  "host=\"algalon.actual.battle.net.evil.example\" port=\"1120\"",
+  "host=\"algalon.actual.battle.net\" port=\"1120\"",
+  "host=\"algalon.actual.battle.net.evil.example\" port=\"21843\"",
   "host=\"algalon.actual.battle.net\"",
-] {
+]
+for endpoint in refusedEndpoints {
   setenv("FOREVER_FIXTURE_ENDPOINT", endpoint, 1)
   let wrongEndpoint = try launchClient(client, serverIP: "203.0.113.7", resolverLibrary: resolver,
                                      log: { _ in })
@@ -193,7 +199,7 @@ for endpoint in [
           "Logs/credentials-stage").path),
         "unexpected endpoint stops the owned child before its credentials stage: \(endpoint)")
 }
-setenv("FOREVER_FIXTURE_ENDPOINT", "host=\"ALGALON.actual.battle.net\" port=\"1120\"", 1)
+setenv("FOREVER_FIXTURE_ENDPOINT", "host=\"ALGALON.actual.battle.net\" port=\"21843\"", 1)
 let allowedEndpoint = try launchClient(client, serverIP: "203.0.113.7", resolverLibrary: resolver,
                                      log: { _ in })
 allowedEndpoint.process.waitUntilExit()
@@ -203,17 +209,28 @@ check(!allowedEndpoint.guardLog.finish() && allowedEndpoint.process.terminationS
         "Logs/credentials-stage").path),
       "expected endpoint proceeds despite an unexpected endpoint in the previous run's log")
 check(try fm.contentsOfDirectory(atPath: client.privateProduct.appendingPathComponent(
-  "Logs/Previous").path).count == 5, "prior connection logs are retained separately from the fresh run")
+  "Logs/Previous").path).count == refusedEndpoints.count + 1,
+  "prior connection logs are retained separately from the fresh run")
 let privateConfig = client.privateProduct.appendingPathComponent("WTF/Algalon.wtf")
 let firstConfig = try String(contentsOf: privateConfig, encoding: .utf8)
-check(firstConfig.contains("SET portal \"algalon:1120\""), "private portal is configured")
+check(firstConfig.contains("SET portal \"algalon:21843\""), "private portal is configured")
 check(firstConfig.contains("SET textLocale \"enUS\""), "private configuration includes an initial text locale")
 try write("SET portal \"test\"\nSET gxWindow \"1\"\nSET textLocale \"ruRU\"\n", privateConfig)
 let nextConfig = try privateConfiguration(client)
 check(nextConfig.contains("SET gxWindow \"1\"") && nextConfig.contains("SET textLocale \"ruRU\""),
       "private settings and language survive the next launch")
 check(!nextConfig.contains("SET portal \"test\"")
-      && nextConfig.contains("SET portal \"algalon:1120\""), "realm portal replaces the region default")
+      && nextConfig.contains("SET portal \"algalon:21843\""), "realm portal replaces the region default")
+
+try write("SET portal \"algalon:1120\"\nSET gxWindow \"1\"\n"
+          + "SET textLocale \"ruRU\"\nSET audioLocale \"deDE\"\n", privateConfig)
+let migratedConfig = try privateConfiguration(client)
+check(migratedConfig.contains("SET portal \"algalon:21843\"")
+      && !migratedConfig.contains("algalon:1120")
+      && migratedConfig.contains("SET gxWindow \"1\"")
+      && migratedConfig.contains("SET textLocale \"ruRU\"")
+      && migratedConfig.contains("SET audioLocale \"deDE\""),
+      "legacy private portal migrates without losing player settings or either locale")
 
 try write("set portal \"EU\"\nSET portal \"test\"\nSET gxWindow \"1\"\n"
           + "SET textLocale \"enUS\"\nset textLocale \"ruRU\"\n"

@@ -52,7 +52,8 @@ struct LoginLayout: Sendable {
     account = CGPoint(x: a.midX, y: (a.maxY + p.minY) / 2)
     password = CGPoint(x: a.midX, y: (p.maxY + r.minY) / 2)
     let band = (r.minY - p.maxY) / 2
-    passwordBand = CGRect(x: a.midX - 0.14, y: password.y - band / 2,
-                          width: 0.28, height: band)
+    // Probe the text interior, excluding the bottom frame and surrounding stone texture.
+    passwordBand = CGRect(x: a.midX - 0.11, y: p.maxY + band * 0.24,
+                          width: 0.22, height: band * 0.6)
   }
 }

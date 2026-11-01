@@ -51,10 +51,12 @@ def generate(profile):
     config = string("REALM_CONFIG")
     if not re.fullmatch(r"[A-Za-z0-9_.-]+\.wtf", config):
         raise ValueError("invalid private config filename")
+    login_port, login_rest_port = 21843, 22517
     values = {
         "id": identifier, "name": name, "longName": long_name,
         "server": server, "portalHost": portal,
-        "portalLine": portal + ":1120", "configName": config, "hostName": host,
+        "loginPort": login_port, "loginRESTPort": login_rest_port,
+        "portalLine": f"{portal}:{login_port}", "configName": config, "hostName": host,
         "privateProduct": "_forever_" + identifier + "_", "newKeyHex": region_key,
         "caSha1": hashlib.sha1(der).hexdigest().upper() if der else "",
         "caPem": pem, "updateRepository": string("REALM_UPDATE_REPO"),
@@ -78,6 +80,8 @@ def generate(profile):
     c = "// Generated from the selected canonical public realm profile.\n#pragma once\n"
     for key, value in native.items():
         c += "#define " + key + " " + json.dumps(value) + "\n"
+    c += "#define REALM_LOGIN_PORT " + str(values["loginPort"]) + "\n"
+    c += "#define REALM_LOGIN_REST_PORT " + str(values["loginRESTPort"]) + "\n"
     c += "#define REALM_CA_SHA256_BYTES {" + ",".join(hex(v) for v in digest) + "}\n"
     (generated / "RealmProfile.h").write_text(c)
     (generated / "bundle.json").write_text(json.dumps({

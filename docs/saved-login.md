@@ -9,12 +9,12 @@ authentication and visual world loading on client1.60.1.70630 on2026-10-27.
 See [the acceptance record](../macos/reports/2026-10-27-native-login.md) for the
 successful run, a separate realm disconnect and remaining distribution limits.
 
-The current1.2.1 review candidate has **not passed password autofill** on client70658.
-Its windowed account targeting now passes, but focusing the password field makes
-the game enable macOS Secure Input. The stricter input guard stops before sending
-a password. Manual Login and the saved Keychain entry remain available. This is
-work in progress, not a completed autofill release; see the
-[current review record](../macos/reports/2026-11-01-native-login-review.md).
+Candidate1.2.2 repairs the Secure Input regression introduced by1.2.1. The installed
+Mac build passed saved-entry autofill, SRP/account and realm authentication, one
+validated region-key installation, the existing character list, visual world loading
+and clean exit on release70707 on2026-11-01.35 native multi-process safety checks
+pass. See the [repair and acceptance record](../macos/reports/2026-11-01-native-input-repair.md)
+for exact scope, signing/update gates and remaining resource costs.
 
 ## Storage and exact input
 
@@ -70,21 +70,27 @@ is entered and read back. Before any password is typed, distinct nonsecret `W` a
 `i` probes must produce two matching compact mask glyphs in the password band;
 erasing both must restore an empty band. The expected account must remain unchanged.
 No secret enters this visual focus check. Final account readback must still match.
-Filling waits at most90seconds for the recognized screen. Short-lived native session
-and PID event taps cancel filling on foreign keyboard/mouse input, including Tab,
-clicks and movement; queued tagged key-downs are dropped while releases still pass.
-A pre-secret check requires both taps to have observed real nonsecret input, and
-each text scalar waits for its PID-tap delivery acknowledgement before the next.
-Secure Input or a disabled tap stops production posting; filtering is not relied
-on when macOS makes events unobservable. CoreGraphics addresses a PID, not a game
-widget: focus checks cannot make the game's own UI changes atomic with delivery.
+Filling waits at most90seconds for the recognized screen. The existing isolated
+native module uses an AppKit local event filter, which remains observable under
+Secure Input. An inherited anonymous socket carries only window identity, random
+nonces, one-event permits and acknowledgements; no account/password text crosses it.
+The filter validates active/key window and geometry, cancels on foreign input
+including Tab/click/movement, and drops queued own input after cancellation, timeout
+or launcher EOF. A short-lived external mouse tap also cancels outside-window input.
+Before secret entry, actual nonsecret key/click acknowledgements, masked-field proof,
+probe erasure and Secure Input are required. Every text scalar uses a tagged key-down
+and empty key-up pair and waits for native delivery acknowledgement. Secure Input is
+never disabled. CoreGraphics addresses a PID, not a game widget: focus checks cannot
+make the game's own programmatic widget changes atomic with delivery.
 A target/focus/permission change stops input; the saved entry is retained. Finish
 manually after an interrupted attempt rather than retrying automatically.
 
 The native form uses a nonblocking modal session within the AppKit event loop.
 A hidden permission dialog or a blocking modal on the async main executor must
-not stall Play. On completion or interruption, a250ms drain retains the closed
-filter for outstanding input; no permanent login observer remains.
+not stall Play. Successful completion removes the local filter and external tap.
+Interruption removes the tap/socket/notifications; an inert local filter remains
+to reject late own events while allowing manual input and paired empty releases.
+The native channel is enabled only for this launch's verified private executable.
 
 The advertised client glue-script arguments failed actual stock-client controls;
 the unused prototype renderers/template have been removed. Client integrity,
@@ -107,13 +113,14 @@ removes only its own fictional entries. Run the existing smoke and updater suite
 before delivery; build and verify both architecture slices and signatures.
 `bash macos/Tests/run-login-safety.sh` independently renders masked and clear fields,
 dead targets, erasure failures and changed geometry with CoreText. The native
-`Tests/login-events` fixture uses fictional input only for own-event delivery,
-foreign HID Tab/click cancellation, covering and non-overlapping focused target
-windows, a stalled target, Secure Input, missing delivery, queued-input drain and
-mouse release after interruption. Build it with `bash macos/Tests/build-login-events.sh`.
-It uses a controller and separate AppKit target, with the production posting
-functions. It requires the test application's own Accessibility/Screen Recording
-permissions and foreground target window. The region
+`Tests/login-events` fixture uses fictional input only for Secure Input delivery,
+third-process Tab/click/movement cancellation, key-window and geometry changes,
+a stalled target, EOF, and paired releases after interruption. Build it with
+`bash macos/Tests/build-login-events.sh`. It runs autonomously with a controller,
+separate AppKit target, third input process and the production channel/filter/posting
+functions. It requires its existing Accessibility/Screen Recording permissions.
+`bash macos/Tests/run-input-channel.sh` exercises both real socket receivers for
+scope, nonce, replay, frame validation, fragmentation, timeout and EOF. The region
 monitor fixture exercises a real isolated native child while UI completion is suspended.
 It also covers40 normal child exits and rejects a live executable-identity mismatch.
 

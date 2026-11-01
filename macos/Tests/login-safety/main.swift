@@ -44,3 +44,41 @@ precondition(!MaskedLoginField.confirms(empty: empty, wide: frame("*"),
 precondition(!MaskedLoginField.confirms(empty: empty, wide: frame("*"),
   pair: frame("*i"), erased: empty), "unequal glyphs must refuse")
 print("PASS: native CoreText masked/clear/monospace/dead-area/erasure/pre-existing/resize controls")
+
+// Independently measured 1280x776 login geometry; stone and frame are outside the textbox interior.
+let size = CGSize(width: 1280, height: 776)
+func normalized(_ rect: CGRect) -> CGRect {
+  CGRect(x: rect.minX / size.width, y: rect.minY / size.height,
+    width: rect.width / size.width, height: rect.height / size.height)
+}
+let layout = LoginLayout(labels: [
+  .account: [normalized(CGRect(x: 551, y: 382, width: 178, height: 22))],
+  .password: [normalized(CGRect(x: 585, y: 460, width: 110, height: 20))],
+  .remember: [normalized(CGRect(x: 538, y: 548, width: 245, height: 24))],
+  .login: [normalized(CGRect(x: 595, y: 594, width: 90, height: 24))],
+])!
+func screenProbe(_ masks: Int) -> MaskedLoginField {
+  let width = Int(size.width), height = Int(size.height)
+  var pixels = [UInt8](repeating: 20, count: width * height * 4)
+  for index in stride(from: 3, to: pixels.count, by: 4) { pixels[index] = 255 }
+  func white(_ x: Int, _ y: Int) {
+    for channel in 0..<3 { pixels[(y * width + x) * 4 + channel] = 255 }
+  }
+  let mask = ["..#..", "#.#.#", ".###.", "#####", ".###.", "#.#.#", "..#.."]
+  for origin in (0..<masks).map({ 504 + $0 * 8 }) + [800] {
+    for (y, row) in mask.enumerated() {
+      for (x, value) in row.enumerated() where value == "#" { white(origin + x, 496 + y) }
+    }
+  }
+  for x in 494..<786 { white(x, 520) }
+  let provider = CGDataProvider(data: Data(pixels) as CFData)!
+  let image = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+    bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+    bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+    provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
+  return MaskedLoginField(image: image, region: layout.passwordBand)!
+}
+precondition(MaskedLoginField.confirms(empty: screenProbe(0), wide: screenProbe(1),
+  pair: screenProbe(2), erased: screenProbe(0)),
+  "measured layout must include whole masks and exclude static frame/stone")
+print("PASS: measured login geometry excludes frame/stone without clipping probe masks")

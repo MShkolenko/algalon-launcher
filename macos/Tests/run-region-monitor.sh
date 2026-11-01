@@ -10,6 +10,7 @@ xcrun clang -I Sources/MachKeyStore/include -c Sources/MachKeyStore/keystore.c \
   -o "$CHECK_BUILD/keystore.o"
 xcrun swiftc -parse-as-library -I "$CHECK_BUILD" Generated/RealmProfile.swift \
   Sources/ForeverLauncher/{Constants,SystemSetup,ClientCopy,ConnectionGuard,RegionKeyMonitor}.swift \
+  Sources/ForeverLauncher/{LoginInputChannel,LoginInputGuard}.swift \
   Tests/region-monitor/main.swift "$CHECK_BUILD/keystore.o" -o "$CHECK_BUILD/monitor"
 cat > "$CHECK_BUILD/entitlements.plist" <<'PLIST'
 <?xml version="1.0"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
