@@ -9,7 +9,7 @@
 #pragma comment(lib, "bcrypt.lib")
 
 #ifndef LAUNCHER_VERSION
-#define LAUNCHER_VERSION L"1.2.0"
+#define LAUNCHER_VERSION L"1.2.2"
 #endif
 
 namespace upd {

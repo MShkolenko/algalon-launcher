@@ -373,6 +373,12 @@ struct Verdict {
     int y0 = 0, y1 = 0, x0 = 0, x1 = 0, x2 = 0, glyph_distance = 0;
 };
 
+// Two passing verdicts describe one field when every measurement agrees exactly; a field one pixel apart is another.
+static bool same_field(const Verdict& a, const Verdict& b) {
+    return a.masked == b.masked && a.y0 == b.y0 && a.y1 == b.y1 && a.x0 == b.x0 && a.x1 == b.x1 && a.x2 == b.x2 &&
+           a.glyph_distance == b.glyph_distance;
+}
+
 // Mean colour distance over a rectangle between two frames, and how many of its pixels differ clearly.
 static void region_diff(const Frame& a, const Frame& b, int x0, int y0, int x1, int y1, int& mean, long& strong) {
     long long sum = 0, cnt = 0;
@@ -501,10 +507,12 @@ static Probe probe(const Job& job, HWND h, int attempt) {
     auto m01 = changed(f0, f1), m12 = changed(f1, f2), m23 = changed(f2, g);
     if (m01.empty() || m12.empty() || m23.empty()) return Probe::unsafe;  // the window changed size mid-probe
     // candidate pairs: a blob from the W, and a blob from the i on the same row just right of it; each candidate must
-    // pass every check below, and exactly one may (the embers sometimes make a second, false pair)
+    // pass every check below, and exactly one field may (the embers sometimes make a second, false pair). At 4K a
+    // glyph and the caret after it can be separate blobs, so one field yields several passing pairs that measure the
+    // very same rows, caret steps and glyph distance (2026-11-01, client 70707: 4 pairs, one field): those count once.
     std::vector<Box> b1 = blobs(m01, w, hh), b2 = blobs(m12, w, hh);
     int tried = 0, passed = 0;
-    Verdict found{};
+    std::vector<Verdict> fields;
     for (const Box& a : b1)
         for (const Box& b : b2) {
             int reach = 3 * (a.w() > a.h() ? a.w() : a.h());
@@ -513,20 +521,23 @@ static Probe probe(const Job& job, HWND h, int attempt) {
             Verdict v = judge(h, f0, f1, f2, g, m01, m12, m23, a, b);
             if (v.ok) {
                 ++passed;
-                found = v;
+                bool known = false;
+                for (const Verdict& f : fields) known = known || same_field(f, v);
+                if (!known) fields.push_back(v);
             }
         }
-    sayf(job, L"autofill: probe %d: %d candidate pairs (%zu and %zu blobs), %d passed", attempt, tried, b1.size(),
-         b2.size(), passed);
-    if (passed == 1) {
+    sayf(job, L"autofill: probe %d: %d candidate pairs (%zu and %zu blobs), %d passed, %d field(s)", attempt, tried,
+         b1.size(), b2.size(), passed, static_cast<int>(fields.size()));
+    if (fields.size() == 1) {
+        const Verdict& found = fields[0];
         sayf(job, L"autofill: probe %d: rows %d-%d, caret %d -> %d -> %d, glyph distance %d, %s", attempt, found.y0,
              found.y1, found.x0, found.x1, found.x2, found.glyph_distance, found.masked ? L"masked" : L"clear");
         return found.masked ? Probe::masked : Probe::clear;
     }
     // No pair passed: the keys found no text field (no login screen yet) - an edit box that took them would show
     // two glyphs and a moving caret. Accepted limit (operator, 2026-10-29): this is screen evidence; the keys were
-    // erased above in any case. More than one passing pair cannot be told apart: stop.
-    return passed == 0 ? Probe::unclear : Probe::unsafe;
+    // erased above in any case. More than one field cannot be told apart: stop.
+    return fields.empty() ? Probe::unclear : Probe::unsafe;
 }
 
 // ---- the thread --------------------------------------------------------------------------------------------------
