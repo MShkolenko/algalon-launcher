@@ -1184,7 +1184,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                                                         {L"key", DEF_KEY},       {L"group", std::to_wstring(DEF_GROUP)}};
     for (const auto& d : defaults)
         if (!ini.count(d.first)) ini[d.first] = d.second;
-    if (ini[L"portal"] == OLD_PORTAL) {
+    if (lower(ini[L"portal"]) == lower(OLD_PORTAL)) {  // read_ini already trims; case is ignored (Codex)
         say(L"settings: portal %s -> %s (the realm moved off the standard ports)", OLD_PORTAL, DEF_PORTAL);
         ini[L"portal"] = DEF_PORTAL;
     }
