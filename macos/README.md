@@ -4,6 +4,14 @@ Native Swift/C launcher for the macOS release client. This is the profile-separa
 working Mac baseline, licensed under this repository's MIT license with the operator's explicit
 consent. No game files, credentials, session proofs, private signing keys or raw logs are included.
 
+See [remembered server login](../docs/saved-login.md) for the native login form,
+Keychain storage, optional macOS14 autofill permissions and current acceptance limits.
+Candidate1.2.2 repairs the1.2.1 Secure Input regression and follows the current
+portal21843/LoginREST22517 contract. Installed saved-entry autofill, account/realm
+login, one region key, an existing character, visual world loading and clean exit
+passed on70707. See [the acceptance record](reports/2026-11-01-native-input-repair.md)
+for35 actual native controls, signing limits and measured scanner resource cost.
+
 ## Profiles and build
 
 The canonical realm inputs are `../windows/profiles/<name>/profile.h`: server, portal, private
@@ -13,9 +21,10 @@ preprocessed by the native compiler and consumed as string literals by `packagin
 The generator derives the private product path and both certificate fingerprints; there is no
 second manually maintained copy of the CA or update key in the Mac code.
 
-Requirements: macOS with Xcode command-line tools, Swift 5.7 or later, and Python 3. The declared
-deployment target is macOS 12. The verified build environment is Xcode 27 / Apple Swift 6.4 on
-macOS 27.0.1. Intel hardware and older supported OS versions have not been exercised.
+Requirements: Xcode command-line tools with the macOS14 SDK or newer, Swift5.7 or later, and Python3.
+The declared deployment target is macOS12; optional automatic filling requires macOS14. The current
+verified build environment is Xcode27 / Apple Swift6.4.2 on macOS27.2. ScreenCaptureKit is weak-linked
+in both architecture slices. Intel hardware and older supported OS versions have not been exercised.
 
 From the repository root:
 
@@ -39,7 +48,9 @@ The default is hardened ad-hoc signing. A distributor may set `FOREVER_SIGN_IDEN
 installed Developer ID Application identity. The script signs the library before the outer bundle
 and verifies the complete result with `codesign --verify --deep --strict`. Signing identities and
 private keys are never build inputs stored in Git. Developer ID distribution, notarization and
-Gatekeeper installation on a clean Mac remain pending the owner's distribution decision.
+Gatekeeper installation on a clean Mac have not been exercised. The owner explicitly chose
+ad-hoc distribution without Developer ID or notarization; renewed Keychain/TCC approvals after
+binary changes are accepted. Do not bypass those checks to hide prompts.
 
 To package a verified bundle without losing its symlinks or signature:
 
@@ -68,7 +79,8 @@ into the official product. Backups and staged-copy recovery remain in the copy t
 The private configuration retains unrelated preferences and exactly one portal, text locale and
 audio locale. Valid private locales take priority, followed by official locales, the active `wowf`
 build tags, and `enUS`. Both locales are seeded before first launch to avoid the region chooser
-overwriting the portal. Credentials are entered only in the game.
+overwriting the portal. Credentials are entered in the native launcher form or
+manually in the game; optional storage uses the login Keychain, never Config.wtf.
 
 ## Network and trust boundaries
 
@@ -80,10 +92,19 @@ missing, macOS requires the player's separate confirmation before adding it.
 The bundled resolver/trust/proxy library is admitted only in the canonical private executable
 selected for that launch. Its canonical path must also have the profile's private-product suffix.
 Process-local DNS redirects only the expected realm alias. Other Battle.net login aliases are
-refused. The `connect` interposition admits login traffic only to the selected IPv4 on port 1120;
+refused. The `connect` interposition admits login traffic only to the selected IPv4 on port 21843;
+legacy login ports1119/1120 remain refused, even for the selected address;
 other ordinary ports retain native behavior. These are scoped `getaddrinfo`/`connect` checks, not
-a claim to mediate every socket API. Only HTTPS to the exact realm on port 8082 receives the
+a claim to mediate every socket API. Only HTTPS to the exact realm on port 22517 receives the
 existing process-local proxy exception.
+
+The [November1 server migration](https://github.com/MShkolenko/algalon-mac/issues/1#issuecomment-6557144306)
+uses portal21843 and LoginREST22517. The shared Mac profile generator supplies both
+Swift and C constants. Existing private settings migrate from the old portal while
+retaining graphics and both locales. The world port is announced by the server
+(currently23964); it is not substituted in the launcher. The site is
+https://algaloncore.com:24713. The reissued leaf certificate supplies its new CRL
+distribution point; there is no launcher CRL-URL or certificate-verification override.
 
 A fresh private `Connection.log` is monitored, with prior logs retained in `Logs/Previous`.
 Unexpected or malformed logon endpoints stop the exact owned child after checking its canonical
@@ -93,6 +114,13 @@ DNS/transport checks provide the earlier guard for the intercepted APIs.
 The runtime scanner accepts only a complete validated 12-entry Blizzard key table. It replaces
 region group 8 in private process memory and confirms the write. No disk key patch is made. A
 failed login before the realm stage does not prove key-table incompatibility.
+Monitoring starts immediately after the owned client launches on an independent serial native
+timer. Screen recognition and an indefinitely open filling-error dialog do not delay it. A failed
+validated write stops only the matching owned private client, and its failure is checked at exit.
+The UI awaits a buffered native process-exit notification rather than polling while the game runs.
+Quitting normally before authentication is intentionally quiet: no missing-key error dialog is
+shown, because cancellation is not evidence of an incompatible table. Authentication errors remain
+visible in the game and its private Connection.log; abnormal client exits still raise an error.
 
 ## Verification and current scope
 

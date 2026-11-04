@@ -35,7 +35,8 @@ IDENTITY="${FOREVER_SIGN_IDENTITY:--}"
 xcrun clang -dynamiclib -arch arm64 -arch x86_64 -mmacosx-version-min=12.0 \
   -I Generated -Wno-deprecated-declarations \
   Sources/RealmDNS/RealmDNS.c Sources/RealmDNS/RealmCA.c Sources/RealmDNS/RealmProxy.c \
-  -framework Security -framework CoreFoundation -framework CFNetwork \
+  Sources/RealmDNS/RealmInput.m -fobjc-arc \
+  -framework Security -framework CoreFoundation -framework CFNetwork -framework AppKit -framework Carbon \
   -o "$APP/Contents/Frameworks/libRealmDNS.dylib"
 python3 - "$APP" <<'PYTHON'
 from pathlib import Path

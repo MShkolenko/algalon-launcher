@@ -6,6 +6,7 @@
 #include <signal.h>
 
 int main(void) {
+  if (getenv("FOREVER_INPUT_FIXTURE") || getenv("FOREVER_INPUT_CHANNEL")) return 5;
   const char *endpoint = getenv("FOREVER_FIXTURE_ENDPOINT");
   if (endpoint) {
     signal(SIGTERM, SIG_IGN);
@@ -26,7 +27,7 @@ int main(void) {
   if (!expected) return 0;
   struct addrinfo hints = {.ai_family = AF_INET, .ai_socktype = SOCK_STREAM};
   struct addrinfo *answer = NULL;
-  if (getaddrinfo("algalon.actual.battle.net", "1120", &hints, &answer) != 0) return 1;
+  if (getaddrinfo("algalon.actual.battle.net", "21843", &hints, &answer) != 0) return 1;
   char address[NI_MAXHOST];
   int status = getnameinfo(answer->ai_addr, answer->ai_addrlen, address, sizeof(address),
                            NULL, 0, NI_NUMERICHOST);

@@ -48,7 +48,7 @@ static const struct { const void *substitute; const void *original; } realm_reso
   (const void *)&realm_getaddrinfo, (const void *)&getaddrinfo
 };
 
-// Login ports must never reach another realm, including numeric destinations that bypass DNS.
+// Guard login ports on this process's intercepted connect path, including numeric destinations.
 static int realm_connect(int descriptor, const struct sockaddr *address, socklen_t size) {
   if (address && size >= sizeof(struct sockaddr) && realmPrivateProcess()) {
     uint16_t port = 0;
@@ -62,10 +62,10 @@ static int realm_connect(int descriptor, const struct sockaddr *address, socklen
       port = ntohs(v6->sin6_port);
       if (IN6_IS_ADDR_V4MAPPED(&v6->sin6_addr)) ipv4 = &v6->sin6_addr.s6_addr[12];
     }
-    if (port == 1119 || port == 1120) {
+    if (port == 1119 || port == 1120 || port == REALM_LOGIN_PORT) {
       struct in_addr expected;
       const char *ip = realmServerIPv4();
-      if (port != 1120 || !ipv4 || !ip || inet_pton(AF_INET, ip, &expected) != 1
+      if (port != REALM_LOGIN_PORT || !ipv4 || !ip || inet_pton(AF_INET, ip, &expected) != 1
           || memcmp(ipv4, &expected, sizeof(expected))) {
         fputs("[Forever DNS] refused unexpected login address or port\n", stderr);
         errno = EACCES;

@@ -12,7 +12,7 @@ let package = Package(
       dependencies: ["MachKeyStore", "ArchiveCheck"],
       path: ".",
       exclude: ["Tests", "packaging", "profiles", "Sources/MachKeyStore", "Sources/RealmDNS",
-        "Sources/ArchiveCheck", "README.md", "validation.json", "dist", "Generated/RealmProfile.h",
+        "Sources/ArchiveCheck", "README.md", "reports", "validation.json", "dist", "Generated/RealmProfile.h",
         "Generated/bundle.json"],
       sources: ["Sources/ForeverLauncher", "Generated/RealmProfile.swift"]
     ),

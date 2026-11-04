@@ -2,7 +2,7 @@
 
 Starts the World of Warcraft: Forever (Classic 1.60) client against a private realm, without modifying the client
 files and without touching the official game setup. Open source (MIT). The official release binaries are built for the
-**Algalon Forever** realm (https://algaloncore.com), but the code names no realm: everything realm-specific lives in a
+**Algalon Forever** realm (https://algaloncore.com:24713), but the code names no realm: everything realm-specific lives in a
 build profile, so anyone can build it for their own server.
 
 The realm side is the TrinityCore fork for WoW Forever by advocaite:
@@ -85,8 +85,8 @@ or private keys go into this repository or into a launcher.
   refusal of a foreign signature and of a mismatching download.
 - **macOS** (`macos/`, from version 1.1.1): implements the same authenticated feed with bounded ZIP
   validation, native signature/identity checks, a single-instance lock, two-way startup confirmation
-  and rollback. Native process/recovery tests and reading the public signed feed pass. Actual
-  production-signed Mac feed activation and distribution acceptance are still pending; see
+  and rollback. Native process/recovery tests and the historical1.0.4-to1.1.1 production-feed
+  activation pass. New candidates require owner signing/promotion and fresh distribution acceptance; see
   [macOS operational notes](macos/README.md#authenticated-launcher-updates).
 
 ## Disclaimer

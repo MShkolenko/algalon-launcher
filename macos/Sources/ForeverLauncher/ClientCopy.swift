@@ -313,7 +313,9 @@ func privateConfiguration(_ cl: Client) throws -> String {
 // Write only private settings and launch the copy with its private configuration.
 
 func launchClient(_ cl: Client, serverIP: String, resolverLibrary: URL,
-                  log: (String) -> Void) throws -> (process: Process, guardLog: ConnectionGuard) {
+                  automaticInput: Bool = false, log: (String) -> Void) throws
+  -> (process: Process, guardLog: ConnectionGuard, exited: AsyncStream<Void>,
+      input: LoginInputChannel?) {
     try assertPrivateIsolated(cl)
     if anotherWowRunning() {
         throw CopyError.message("a WoW client is already running. Quit it first: both clients share the game data folder.")
@@ -330,13 +332,25 @@ func launchClient(_ cl: Client, serverIP: String, resolverLibrary: URL,
     log("wrote \(C.configName): portal \(C.portalLine)")
 
     let game = Process()
+    let exited = AsyncStream<Void>(bufferingPolicy: .bufferingNewest(1)) { continuation in
+      game.terminationHandler = { _ in
+        continuation.yield(())
+        continuation.finish()
+      }
+    }
     game.executableURL = cl.privateBinary
     game.currentDirectoryURL = cl.privateProduct
     game.arguments = ["-config", C.configName]
+    let input = automaticInput ? try LoginInputChannel() : nil
+    if let input { game.standardInput = input.childInput }
+    defer { input?.closeChildInput() }
     var environment = ProcessInfo.processInfo.environment
     environment["DYLD_INSERT_LIBRARIES"] = resolverLibrary.path
     environment["FOREVER_SERVER_IPV4"] = serverIP
     environment["FOREVER_PRIVATE_EXECUTABLE"] = realPath(cl.privateBinary)
+    environment.removeValue(forKey: "FOREVER_INPUT_CHANNEL")
+    environment.removeValue(forKey: "FOREVER_INPUT_FIXTURE")
+    if input != nil { environment["FOREVER_INPUT_CHANNEL"] = "1" }
     game.environment = environment
     let logs = cl.privateProduct.appendingPathComponent("Logs")
     try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
@@ -350,7 +364,8 @@ func launchClient(_ cl: Client, serverIP: String, resolverLibrary: URL,
     defer { try? output.close() }
     game.standardOutput = output
     game.standardError = output
-    try game.run()
+    do { try game.run() }
+    catch { input?.abort(); throw error }
     let guardLog: ConnectionGuard
     do {
       guardLog = try ConnectionGuard(game: game, file: connectionFile, url: connectionURL)
@@ -360,5 +375,5 @@ func launchClient(_ cl: Client, serverIP: String, resolverLibrary: URL,
       throw error
     }
     log("client launched, pid \(game.processIdentifier)")
-    return (game, guardLog)
+    return (game, guardLog, exited, input)
 }

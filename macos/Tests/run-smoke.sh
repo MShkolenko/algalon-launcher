@@ -6,12 +6,15 @@ CHECK_BUILD=$(mktemp -d "${TMPDIR:-/tmp}/algalon-check.XXXXXX")
 trap 'rm -rf "$CHECK_BUILD"' EXIT
 xcrun clang -I Generated -dynamiclib -Wall -Wextra -Werror -Wno-deprecated-declarations \
   Sources/RealmDNS/RealmDNS.c Sources/RealmDNS/RealmCA.c Sources/RealmDNS/RealmProxy.c \
-  -framework Security -framework CoreFoundation -framework CFNetwork -o "$CHECK_BUILD/libRealmDNS.dylib"
+  Sources/RealmDNS/RealmInput.m -fobjc-arc \
+  -framework Security -framework CoreFoundation -framework CFNetwork -framework AppKit -framework Carbon \
+  -o "$CHECK_BUILD/libRealmDNS.dylib"
 codesign --force --sign - "$CHECK_BUILD/libRealmDNS.dylib"
 xcrun clang Tests/client-fixture.c -o "$CHECK_BUILD/client-fixture"
 swiftc Generated/RealmProfile.swift Sources/ForeverLauncher/Constants.swift \
   Sources/ForeverLauncher/SystemSetup.swift \
   Sources/ForeverLauncher/ConnectionGuard.swift \
+  Sources/ForeverLauncher/LoginInputChannel.swift Sources/ForeverLauncher/LoginInputGuard.swift \
   Sources/ForeverLauncher/ClientCopy.swift Tests/main.swift \
   -o "$CHECK_BUILD/smoke"
 "$CHECK_BUILD/smoke" "$CHECK_BUILD/libRealmDNS.dylib" "$CHECK_BUILD/client-fixture"
