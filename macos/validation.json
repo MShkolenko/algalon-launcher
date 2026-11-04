@@ -11,7 +11,7 @@
   "real_game_launched": true,
   "system_trust_modified": false,
   "self_update_implemented": true,
-  "scope": "Installed1.2.2(10) accepted on70707 with saved-entry filling, SRP/account/realm, one region key, character/world and clean exit; owner production-feed promotion pending",
+  "scope": "November1 installed1.2.2 game acceptance belongs to70707. November4 public1.1.1-to1.2.2 feed activation passes;70790 private copy prepared, no70790 Mac game acceptance.",
   "baseline_live_client": "1.60.1.70532 arm64 release",
   "baseline_live_result": "Account/SRP, realm, one validated region key, character list, visual world, clean exit confirmed on 2026-10-26 in original1.0.3 build",
   "current_profile_port_live_run": true,
@@ -33,7 +33,7 @@
   "current_version": "1.2.2(10)",
   "full_128_bit_attempt_token": true,
   "old_fixture_runs_from_bundle_being_renamed": true,
-  "feed_activation_scope": "Historical1.0.4-to1.1.1 on2026-10-27; current1.2.2 not promoted",
+  "feed_activation_scope": "Historical1.0.4-to1.1.1 onOctober27; actual public ad-hoc1.1.1-to1.2.2 onNovember4 at23:13:31MSK",
   "current_live_client": "1.60.1.70707 release arm64",
   "current_live_credentials_submitted": true,
   "current_windowed_account_placement": true,
@@ -63,7 +63,7 @@
     "afterExit": 0
   },
   "current_profile_port_live_run_scope": "Installed70707 account/realm/key/character/world/clean-exit acceptance on new21843/22517 contract2026-11-01",
-  "production_feed_promoted": false,
+  "production_feed_promoted": true,
   "pre_auth_performance": {
     "snapshot_one_core_cpu_percent": 78,
     "snapshot_resident_mib_approx": 94,
@@ -98,5 +98,25 @@
   },
   "current_official_strict_bundle_valid": false,
   "current_official_strict_bundle_failure": "Unsigned vendor icudt78l.dat subcomponent; all78 baseline records unchanged; no official repair",
-  "current_official_root_code_without_resources_valid": true
+  "current_official_root_code_without_resources_valid": true,
+  "latest_prepared_client": "1.60.1.70790 release arm64",
+  "latest_prepared_client_game_acceptance": false,
+  "last_accepted_game_client": "1.60.1.70707 release arm64",
+  "last_accepted_game_date": "2026-11-01",
+  "public_feed_activation_2026_11_04": {
+    "from": "1.1.1(6) public ad-hoc",
+    "to": "1.2.2(10) public ad-hoc",
+    "timeMSK": "23:13:31",
+    "rawSignatureVerified": true,
+    "tamperedControlRejected": true,
+    "archiveSHA256": "5d3f421b1c6f8da77a17002e32053f66818afa2a681db459db5958e3eb812025",
+    "archiveBytes": 505292,
+    "bundleFilesExact": true,
+    "strictAllArchitectures": true,
+    "installedDevelopmentCopyUnchanged": true,
+    "officialRowsUnchanged": 78,
+    "gameLaunched": false,
+    "credentialsSubmitted": false,
+    "report": "reports/2026-11-04-public-feed-activation.md"
+  }
 }
