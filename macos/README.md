@@ -11,6 +11,8 @@ portal21843/LoginREST22517 contract. Installed saved-entry autofill, account/rea
 login, one region key, an existing character, visual world loading and clean exit
 passed on70707. See [the acceptance record](reports/2026-11-01-native-input-repair.md)
 for35 actual native controls, signing limits and measured scanner resource cost.
+The [November4 public-feed result](reports/2026-11-04-public-feed-activation.md)
+confirms1.1.1-to1.2.2 activation and distinguishes prepared70790 from70707 game acceptance.
 
 ## Profiles and build
 
@@ -103,7 +105,7 @@ uses portal21843 and LoginREST22517. The shared Mac profile generator supplies b
 Swift and C constants. Existing private settings migrate from the old portal while
 retaining graphics and both locales. The world port is announced by the server
 (currently23964); it is not substituted in the launcher. The site is
-https://algaloncore.com:24713. The reissued leaf certificate supplies its new CRL
+https://algaloncore.com (443). The reissued leaf certificate supplies its new CRL
 distribution point; there is no launcher CRL-URL or certificate-verification override.
 
 A fresh private `Connection.log` is monitored, with prior logs retained in `Logs/Previous`.
